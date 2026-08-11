@@ -7,9 +7,11 @@ import sys
 import time
 
 from datetime import datetime
+from typing import Dict, Optional
 
 from loop import __version__
 from loop.config import Config, ConfigError, load_config
+from loop.daemon import SelfHealer
 from loop.events import DaemonStarted, DaemonStopping, PassCompleted, PassFailed, PassStarted
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
 from loop.scheduler import PassEvent, Scheduler, SchedulerConfigError, parse_duration, parse_schedule_override
@@ -34,23 +36,44 @@ def _resolve_schedule(config: Config, override: str | None):
     return {role: parse_duration(value) for role, value in raw.items()}
 
 
-def _make_tick_fn(manager: PluginManager):
-    """Placeholder tick body: the scheduler only fires ticks (NG-1). The
-    real build/review pass engine is wired in here by a later issue.
-    AC-6: every state transition still produces an event -- emit()
-    PassStarted before the (currently no-op) work and
+def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dict[str, Optional[Scheduler]]):
+    """Tick body run on every scheduler tick (build and review).
+
+    REA-89 wires the self-healing checks in here so they run on the
+    same cadence as the pipeline itself, with no separate timer: every
+    tick first checks for a stuck pass (AC-1) and plugin health (AC-4);
+    a build tick additionally checks for a silent stall (AC-2) and
+    updates the empty-queue / stale-ready counters (AC-3/AC-6). AC-7:
+    every state transition still produces an event -- emit()
+    PassStarted before the (currently no-op) pass work and
     PassCompleted/PassFailed after."""
 
     def tick_fn(role: str) -> None:
         manager.emit(PassStarted(role=role, issue_id="", timestamp=datetime.now()))
         start = time.monotonic()
         try:
-            pass  # real pass engine wiring is a later issue
+            healer.check_stuck_passes()
+            healer.check_plugin_health()
+            if role == "build":
+                from loop.pass_engine import PassEngineError, _linear_plugin
+                try:
+                    linear = _linear_plugin(manager)
+                    ready = linear.list_ready()
+                    open_issues = ready if ready else (
+                        linear.list_open() if hasattr(linear, "list_open") else []
+                    )
+                    healer.record_build_tick(len(ready), len(open_issues))
+                except PassEngineError:
+                    pass
+                healer.check_stall(scheduler_ref.get("scheduler"))
+            # real pass engine wiring (claim/build/review) is a later issue
         except Exception as e:  # noqa: BLE001 - surfaced as PassFailed, not raised
+            healer.record_pass_failed()
             manager.emit(PassFailed(role=role, issue_id="", error=str(e), timestamp=datetime.now()))
             raise
         else:
             duration = time.monotonic() - start
+            healer.record_pass_completed()
             manager.emit(PassCompleted(role=role, issue_id="", outcome="noop", duration_s=duration, timestamp=datetime.now()))
 
     return tick_fn
@@ -72,10 +95,13 @@ def cmd_serve(args) -> int:
         manager.stop_all()
         return 1
 
-    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager), notify=manager.notify)
+    healer = SelfHealer(config, manager)
+    scheduler_ref: Dict[str, Optional[Scheduler]] = {"scheduler": None}
+    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager, healer, scheduler_ref), notify=manager.notify)
+    scheduler_ref["scheduler"] = scheduler
     scheduler.start()
 
-    webui = WebUIServer(host=args.host, port=args.port)
+    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot)
     webui.start()
     manager.emit(DaemonStarted(
         version=__version__, plugins=[lp.name for lp in manager.plugins], timestamp=datetime.now(),

@@ -112,6 +112,19 @@ class Scheduler:
             t.start()
             self._threads.append(t)
 
+    def force_tick(self, role: str) -> bool:
+        """REA-89 AC-2: run `role`'s tick immediately, bypassing the
+        normal schedule (used by the daemon's idle-detector to break a
+        silent stall). Respects the same no-overlap rule as a normal
+        tick: returns False (no-op) if a tick for `role` is already
+        running, True if a forced tick was started."""
+        if role not in self.schedule:
+            raise SchedulerConfigError(f"unknown role {role!r}: not in schedule")
+        if self._running[role].is_set():
+            return False
+        threading.Thread(target=self._execute, args=(role,), daemon=True).start()
+        return True
+
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
         for t in self._threads:
