@@ -68,6 +68,28 @@ def test_list_ready_filters_labels(mock_gql, monkeypatch):
 
 
 @patch("loop.plugins.linear._gql")
+def test_list_in_review_filters_by_label(mock_gql, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "k")
+    mock_gql.side_effect = [
+        {"teams": {"nodes": [{"id": "t1", "key": "REA", "name": "Reach"}]}},
+        {
+            "issues": {
+                "nodes": [
+                    {"id": "1", "identifier": "REA-1", "title": "A", "url": "u",
+                     "state": {"name": "In Review"}, "labels": {"nodes": [{"name": "stage-in-review"}]}},
+                    {"id": "2", "identifier": "REA-2", "title": "B", "url": "u",
+                     "state": {"name": "Todo"}, "labels": {"nodes": [{"name": "agent-ready"}]}},
+                ]
+            }
+        },
+    ]
+    plugin = LinearPlugin()
+    plugin.init({})
+    in_review = plugin.list_in_review()
+    assert [i["identifier"] for i in in_review] == ["REA-1"]
+
+
+@patch("loop.plugins.linear._gql")
 def test_get_issue(mock_gql, monkeypatch):
     monkeypatch.setenv("LINEAR_API_KEY", "k")
     mock_gql.return_value = {"issue": {"id": "1", "identifier": "REA-1", "title": "T"}}
