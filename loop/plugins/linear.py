@@ -257,6 +257,35 @@ class LinearPlugin(Plugin):
                 out.append(issue)
         return out
 
+    def list_in_review(self, review_label: str = "stage-in-review") -> List[dict]:
+        """Issues currently awaiting review -- used by the pass engine's
+        review pass (REA-87 AC-3) to find work with a branch pushed by
+        build but not yet approved. Filtered by label the same way
+        `list_ready()` filters by `agent-ready`: `loop-build` applies
+        `review_label` when it submits a branch (see `pass_engine`).
+        """
+        team = self._resolve_team()
+        data = _gql(
+            self._require_api_key(),
+            """
+            query($teamId: ID!) {
+              issues(filter: {
+                team: { id: { eq: $teamId } }
+              }, first: 100) {
+                nodes { id identifier title url state { name } labels { nodes { name } } }
+              }
+            }
+            """,
+            {"teamId": team["id"]},
+        )
+        review_label = review_label.lower()
+        out = []
+        for issue in data["issues"]["nodes"]:
+            names = {l["name"].lower() for l in issue["labels"]["nodes"]}
+            if review_label in names:
+                out.append(issue)
+        return out
+
     def claim_issue(self, issue_id: str, state: Optional[str] = None) -> dict:
         api_key = self._require_api_key()
         team = self._resolve_team(include_states=True)
