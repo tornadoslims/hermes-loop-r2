@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from loop.config import Config
 from loop.plugins.base import Plugin
+from loop.events import EventBus
+from loop.plugins.log import LogPlugin
 
 
 class PluginLoadError(Exception):
@@ -97,6 +99,16 @@ class PluginManager:
     def __init__(self, config: Config):
         self.config = config
         self.plugins: List[LoadedPlugin] = []
+        # AC-1/AC-7: one EventBus per manager instance, shared by every
+        # plugin the daemon loads. `emit()` below is the convenience
+        # wrapper AC-7 asks for so callers don't need to reach into
+        # `manager.bus` directly.
+        self.bus = EventBus()
+        # AC-5: LogPlugin is built-in, not discovered from plugins.dir --
+        # it's always loaded first so no event goes unlogged, and it is
+        # deliberately NOT added to `self.plugins` (kept out of
+        # discover()/status_report() bookkeping for configured plugins).
+        self.log_plugin = LogPlugin(self.bus, config.events.log_file)
 
     def discover(self, validate_only: bool = False) -> List[LoadedPlugin]:
         """Import every configured plugin module and instantiate its
@@ -143,19 +155,19 @@ class PluginManager:
             lp.instance.start()
             lp.started = True
 
-    def stop_all(self) -> None:
-        # Stop in reverse start order.
-        for lp in reversed(self.plugins):
-            if lp.error or lp.instance is None or not lp.started:
-                continue
-            lp.instance.stop()
-            lp.started = False
-
     def load_and_start_all(self) -> None:
         """Convenience: discover (fail-fast) -> init -> start, in order."""
+        # LogPlugin first (AC-5): every event from every plugin loaded
+        # below is captured from the moment they start.
+        self.log_plugin.init({})
+        self.log_plugin.start()
         self.discover(validate_only=False)
         self.init_all()
         self.start_all()
+
+    def emit(self, event: Any) -> None:
+        """AC-7: convenience wrapper around `self.bus.emit(event)`."""
+        self.bus.emit(event)
 
     def notify(self, event: Any) -> None:
         """Forward a scheduler PassEvent to every loaded plugin that wants
@@ -169,6 +181,16 @@ class PluginManager:
             handler = getattr(lp.instance, "on_event", None)
             if callable(handler):
                 handler(event)
+
+    def stop_all(self) -> None:
+        # Stop in reverse start order, then LogPlugin last so it can
+        # still log every other plugin's shutdown-time event.
+        for lp in reversed(self.plugins):
+            if lp.error or lp.instance is None or not lp.started:
+                continue
+            lp.instance.stop()
+            lp.started = False
+        self.log_plugin.stop()
 
     def status_report(self) -> List[Dict[str, Any]]:
         report = []

@@ -1,10 +1,12 @@
 import os
 import textwrap
+from datetime import datetime
 
 import pytest
 
 from loop.config import load_config
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
+from loop.events import DaemonStarted
 
 GOOD_PLUGIN = textwrap.dedent(
     """
@@ -171,3 +173,39 @@ def test_notify_ignores_plugins_without_on_event(tmp_path):
 
     # Must not raise even though GoodPlugin has no on_event method.
     manager.notify(object())
+
+
+def test_load_and_start_all_starts_log_plugin_first(tmp_path):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "good.py").write_text(GOOD_PLUGIN)
+    config = _make_config(tmp_path, plugin_dir, ["good"])
+    manager = PluginManager(config)
+    manager.load_and_start_all()
+
+    assert manager.log_plugin.status()["started"] is True
+    # LogPlugin isn't a configured plugin -- it never shows up in the
+    # discover()/status_report() list of `[plugins].enabled` plugins.
+    assert all(lp.name != "log" for lp in manager.plugins)
+
+
+def test_emit_reaches_log_plugin(tmp_path):
+    config = _make_config(tmp_path, tmp_path / "plugins", [])
+    (tmp_path / "plugins").mkdir()
+    manager = PluginManager(config)
+    manager.load_and_start_all()
+
+    manager.emit(DaemonStarted(version="0.1.0", plugins=[], timestamp=datetime.now()))
+
+    assert manager.log_plugin.status()["events_written"] == 1
+    assert os.path.isfile(config.events.log_file)
+
+
+def test_stop_all_stops_log_plugin(tmp_path):
+    config = _make_config(tmp_path, tmp_path / "plugins", [])
+    (tmp_path / "plugins").mkdir()
+    manager = PluginManager(config)
+    manager.load_and_start_all()
+    manager.stop_all()
+
+    assert manager.log_plugin.status()["started"] is False

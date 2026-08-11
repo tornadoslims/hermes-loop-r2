@@ -6,8 +6,11 @@ import json
 import sys
 import time
 
+from datetime import datetime
+
 from loop import __version__
 from loop.config import Config, ConfigError, load_config
+from loop.events import DaemonStarted, DaemonStopping, PassCompleted, PassFailed, PassStarted
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
 from loop.scheduler import PassEvent, Scheduler, SchedulerConfigError, parse_duration, parse_schedule_override
 from loop.webui import WebUIServer
@@ -31,9 +34,26 @@ def _resolve_schedule(config: Config, override: str | None):
     return {role: parse_duration(value) for role, value in raw.items()}
 
 
-def _default_tick_fn(role: str) -> None:
+def _make_tick_fn(manager: PluginManager):
     """Placeholder tick body: the scheduler only fires ticks (NG-1). The
-    real build/review pass engine is wired in here by a later issue."""
+    real build/review pass engine is wired in here by a later issue.
+    AC-6: every state transition still produces an event -- emit()
+    PassStarted before the (currently no-op) work and
+    PassCompleted/PassFailed after."""
+
+    def tick_fn(role: str) -> None:
+        manager.emit(PassStarted(role=role, issue_id="", timestamp=datetime.now()))
+        start = time.monotonic()
+        try:
+            pass  # real pass engine wiring is a later issue
+        except Exception as e:  # noqa: BLE001 - surfaced as PassFailed, not raised
+            manager.emit(PassFailed(role=role, issue_id="", error=str(e), timestamp=datetime.now()))
+            raise
+        else:
+            duration = time.monotonic() - start
+            manager.emit(PassCompleted(role=role, issue_id="", outcome="noop", duration_s=duration, timestamp=datetime.now()))
+
+    return tick_fn
 
 
 def cmd_serve(args) -> int:
@@ -52,11 +72,14 @@ def cmd_serve(args) -> int:
         manager.stop_all()
         return 1
 
-    scheduler = Scheduler(schedule=schedule, tick_fn=_default_tick_fn, notify=manager.notify)
+    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager), notify=manager.notify)
     scheduler.start()
 
     webui = WebUIServer(host=args.host, port=args.port)
     webui.start()
+    manager.emit(DaemonStarted(
+        version=__version__, plugins=[lp.name for lp in manager.plugins], timestamp=datetime.now(),
+    ))
     print(json.dumps({
         "status": "serving",
         "webui_url": webui.url,
@@ -68,7 +91,7 @@ def cmd_serve(args) -> int:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        pass
+        manager.emit(DaemonStopping(reason="keyboard_interrupt", timestamp=datetime.now()))
     finally:
         scheduler.stop()
         manager.stop_all()

@@ -21,6 +21,14 @@ this is compatible with) with a [plugins] section:
                                      # (Go-style duration strings: "30s",
                                      # "5m", "1h" -- see loop/scheduler.py)
 
+    [events]
+    log_file = "events.jsonl"       # path to append JSON lines of every
+                                     # EventBus event (loop/events.py),
+                                     # written by the built-in LogPlugin.
+                                     # Relative paths resolve against the
+                                     # instance directory (default);
+                                     # absolute paths pass through.
+
 All paths in the returned Config are resolved to absolute paths so
 callers never need to know where loop.toml itself lives.
 """
@@ -55,12 +63,18 @@ class PipelineConfig:
 
 
 @dataclass
+class EventsConfig:
+    log_file: str = "events.jsonl"
+
+
+@dataclass
 class Config:
     path: str
     raw: Dict[str, Any]
     root: str
     plugins: PluginsConfig
     pipeline: PipelineConfig
+    events: EventsConfig
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
         """Plugin-specific config block for `name`, or {} if none set."""
@@ -119,4 +133,10 @@ def load_config(path: str | None = None) -> Config:
         schedule_review=pipeline_raw.get("schedule_review", "5m"),
     )
 
-    return Config(path=toml_path, raw=raw, root=root, plugins=plugins, pipeline=pipeline)
+    events_raw = raw.get("events", {}) or {}
+    log_file = events_raw.get("log_file", "events.jsonl")
+    if not os.path.isabs(log_file):
+        log_file = os.path.normpath(os.path.join(root, log_file))
+    events = EventsConfig(log_file=log_file)
+
+    return Config(path=toml_path, raw=raw, root=root, plugins=plugins, pipeline=pipeline, events=events)
