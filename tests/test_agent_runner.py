@@ -269,6 +269,7 @@ def test_hermes_run_review_nonzero_exit_raises(sample_issue):
 def test_create_agent_runner_default_is_hermes():
     config = Config(
         path="/tmp/loop.toml", raw={}, root="/tmp",
+        target_repo_path="/tmp/repo",
         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
         pipeline=PipelineConfig(), events=EventsConfig(), agent=None,
     )
@@ -279,6 +280,7 @@ def test_create_agent_runner_default_is_hermes():
 def test_create_agent_runner_claude_code():
     config = Config(
         path="/tmp/loop.toml", raw={}, root="/tmp",
+        target_repo_path="/tmp/repo",
         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
         pipeline=PipelineConfig(), events=EventsConfig(),
         agent=AgentConfig(backend="claude-code", claude_code={"model": "sonnet"}),
@@ -290,6 +292,7 @@ def test_create_agent_runner_claude_code():
 def test_create_agent_runner_codex():
     config = Config(
         path="/tmp/loop.toml", raw={}, root="/tmp",
+        target_repo_path="/tmp/repo",
         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
         pipeline=PipelineConfig(), events=EventsConfig(),
         agent=AgentConfig(backend="codex"),
@@ -301,6 +304,7 @@ def test_create_agent_runner_codex():
 def test_create_agent_runner_unknown_backend_raises():
     config = Config(
         path="/tmp/loop.toml", raw={}, root="/tmp",
+        target_repo_path="/tmp/repo",
         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
         pipeline=PipelineConfig(), events=EventsConfig(),
         agent=AgentConfig(backend="nonexistent"),
