@@ -526,7 +526,7 @@ class SelfHealer:
             # (e.g. mid-flight manual relabel), and that's not ours to fix.
             code, out, _ = _run(
                 ["git", "ls-remote", "--heads", "origin", branch],
-                cwd=self.config.root, timeout=30,
+                cwd=self.config.target_repo_path, timeout=30,
             )
             if code != 0 or not out.strip():
                 continue
