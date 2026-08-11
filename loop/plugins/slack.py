@@ -11,9 +11,9 @@ SLACK_WEBHOOK_URL env var — config wins when both are set):
     [plugins.config.slack]
     webhook_url = "https://hooks.slack.com/services/..."
 
-AC-2: Missing both raises PluginInterfaceError at init() time, not at
-first post.
-AC-4: Network failures are caught and logged, never raised.
+AC-3: enabled=false in config disables the plugin explicitly.
+AC-4: Missing webhook URL disables the plugin with a warning log —
+the daemon continues without crashing.
 AC-5: status() reports configuration state and last post outcome.
 """
 from __future__ import annotations
@@ -33,7 +33,6 @@ from loop.events import (
     QueueEmpty,
     RecoveryEvent,
 )
-from loop.plugin_manager import PluginInterfaceError
 from loop.plugins.base import Plugin
 
 logger = logging.getLogger(__name__)
@@ -110,20 +109,31 @@ class SlackPlugin(Plugin):
     def __init__(self):
         self._webhook_url: Optional[str] = None
         self._started = False
+        self._enabled = True  # AC-3: enable/disable flag from [plugins.slack]
         self._last_post: Optional[Dict[str, Any]] = None
 
     # -- Plugin interface (AC-1) --------------------------------------------
 
     def init(self, config: Dict[str, Any]) -> None:
-        # AC-2: config wins; env var fallback; missing both raises
-        webhook_url = config.get("webhook_url") if config else None
+        # AC-3: enable/disable flag from config (explicit false disables).
+        # AC-4: missing webhook URL fails closed — logs warning, continues.
+        cfg = config or {}
+        if cfg.get("enabled") is False:
+            self._enabled = False
+            self._webhook_url = None
+            return
+
+        webhook_url = cfg.get("webhook_url")
         if not webhook_url:
             webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
         if not webhook_url:
-            raise PluginInterfaceError(
-                "slack: webhook URL not configured — set "
+            self._enabled = False
+            self._webhook_url = None
+            logging.getLogger(__name__).warning(
+                "slack plugin disabled: webhook URL not configured — set "
                 "SLACK_WEBHOOK_URL or [plugins.config.slack] webhook_url in loop.toml"
             )
+            return
         self._webhook_url = webhook_url
 
     def start(self) -> None:
@@ -137,6 +147,7 @@ class SlackPlugin(Plugin):
         result: Dict[str, Any] = {
             "webhook_configured": bool(self._webhook_url),
             "started": self._started,
+            "enabled": self._enabled,
         }
         if self._last_post:
             result["last_post"] = self._last_post
@@ -147,7 +158,7 @@ class SlackPlugin(Plugin):
     def on_event(self, event: object) -> None:
         """Receive events from the PluginManager. Filter for subscribed
         event types, format, and post to Slack (AC-3, AC-4)."""
-        if not self._started or not self._webhook_url:
+        if not self._started or not self._enabled or not self._webhook_url:
             return
 
         # Only format and post events we care about

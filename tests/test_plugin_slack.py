@@ -1,4 +1,4 @@
-"""Tests for loop.plugins.slack (REA-123)."""
+"""Tests for loop.plugins.slack (REA-105)."""
 import os
 from datetime import datetime
 from unittest import mock
@@ -82,21 +82,53 @@ def test_init_config_wins_over_env():
     assert p._webhook_url == "https://hooks.example.com/CFG"
 
 
-def test_init_raises_when_no_webhook_anywhere():
-    """AC-2: missing both config and env raises PluginInterfaceError."""
+def test_init_disables_when_no_webhook_anywhere():
+    """AC-4: missing both config and env disables the plugin without raising."""
     p = SlackPlugin()
     with mock.patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(PluginInterfaceError, match="webhook URL not configured"):
-            p.init({})
-
-
-def test_init_raises_at_init_not_first_post():
-    """AC-2: error happens at init(), not when first event arrives."""
-    p = SlackPlugin()
-    with mock.patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(PluginInterfaceError):
-            p.init({})
+        p.init({})
     assert p._webhook_url is None
+    assert p._enabled is False
+    assert p.status()["enabled"] is False
+    assert p.status()["webhook_configured"] is False
+
+
+def test_init_disables_at_init_not_crashes_at_event():
+    """AC-4: when webhook is missing, plugin is disabled at init() and
+    on_event() is a no-op — the daemon continues without crashing."""
+    p = SlackPlugin()
+    with mock.patch.dict(os.environ, {}, clear=True):
+        p.init({})
+    assert p._webhook_url is None
+    assert p._enabled is False
+    # on_event must not raise even though webhook is missing
+    p.start()
+    with _mock_post_ok():
+        p.on_event(PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now()))
+    assert p._last_post is None  # No post attempted because disabled
+
+
+def test_init_respects_enabled_flag():
+    """AC-3: enabled=false in config disables the plugin explicitly."""
+    p = SlackPlugin()
+    p.init({"enabled": False, "webhook_url": "https://hooks.example.com/X"})
+    assert p._enabled is False
+    assert p._webhook_url is None
+
+
+def test_init_respects_enabled_true():
+    """AC-3: enabled=true (or omitted) allows the plugin to start."""
+    p = SlackPlugin()
+    p.init({"enabled": True, "webhook_url": "https://hooks.example.com/X"})
+    assert p._enabled is True
+    assert p._webhook_url == "https://hooks.example.com/X"
+
+
+def test_init_enabled_defaults_true():
+    """AC-3: when 'enabled' is not in config, plugin defaults to enabled."""
+    p = SlackPlugin()
+    p.init({"webhook_url": "https://hooks.example.com/X"})
+    assert p._enabled is True
 
 
 # -- AC-3: event subscription and message formatting ------------------------
@@ -240,6 +272,17 @@ def test_on_event_ignores_when_not_started():
     """Events received before start() are ignored."""
     p = SlackPlugin()
     p.init({"webhook_url": "https://hooks.example.com/X"})
+    with _mock_post_ok():
+        p.on_event(PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now()))
+    assert p._last_post is None
+
+
+def test_on_event_ignores_when_disabled():
+    """AC-4: events received while disabled (no webhook) are silently ignored."""
+    p = SlackPlugin()
+    with mock.patch.dict(os.environ, {}, clear=True):
+        p.init({})
+    p.start()
     with _mock_post_ok():
         p.on_event(PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now()))
     assert p._last_post is None
