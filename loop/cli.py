@@ -62,6 +62,13 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
                     # issue unblocked or recycled this tick is already
                     # visible to the claim that follows.
                     healer.auto_unblock()
+                    # REA-102: catch a `blocked` label with no parseable
+                    # dependency AND no `needs-human-review` escalation --
+                    # an orphaned label that would otherwise silently
+                    # starve the ready queue forever (nothing else ever
+                    # clears it). Runs before list_ready() for the same
+                    # reason as auto_unblock() above.
+                    healer.auto_unblock_orphaned()
                     healer.recycle_stuck_issues()
 
                     ready = linear.list_ready(log=print)
