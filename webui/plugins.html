@@ -1,99 +1,193 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Plugins — hermes-loop-r2</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plugins — Hermes Loop r2</title>
   <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
 
-  <nav id="topnav">
-    <a class="nav-brand" href="dashboard.html">
-      <span class="dot"></span> hermes-loop-r2
+<nav class="top-nav">
+  <a href="dashboard.html" class="nav-brand">
+    <span class="logo">◈</span>
+    Hermes Loop
+    <span class="version">r2</span>
+  </a>
+  <div class="nav-links">
+    <a href="dashboard.html">Dashboard</a>
+    <a href="issues.html">Issues</a>
+    <a href="passes.html">Passes</a>
+    <a href="plugins.html" class="active">Plugins</a>
+  </div>
+  <div class="nav-status">
+    <span><span class="status-dot"></span> Engine running</span>
+  </div>
+</nav>
+
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-label">Overview</div>
+    <a href="dashboard.html" class="sidebar-link">
+      <span class="icon">⊞</span> Dashboard
     </a>
-    <ul class="nav-links">
-      <li><a href="dashboard.html">Dashboard</a></li>
-      <li><a href="issues.html">Issues</a></li>
-      <li><a href="passes.html">Passes</a></li>
-      <li><a href="plugins.html">Plugins</a></li>
-    </ul>
-    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
-  </nav>
+    <a href="issues.html" class="sidebar-link">
+      <span class="icon">⊡</span> Issues
+    </a>
+    <a href="passes.html" class="sidebar-link">
+      <span class="icon">⟳</span> Passes
+    </a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Configuration</div>
+    <a href="plugins.html" class="sidebar-link active">
+      <span class="icon">⬡</span> Plugins
+      <span class="badge" id="sidebar-plugin-count">5</span>
+    </a>
+    <a href="issues.html" class="sidebar-link">
+      <span class="icon">⚙</span> Settings
+    </a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Health</div>
+    <a href="plugins.html" class="sidebar-link">
+      <span class="icon">◎</span> Service Status
+    </a>
+  </div>
+</aside>
 
-  <div id="shell">
-    <aside id="sidebar">
-      <div class="sidebar-section">
-        <div class="sidebar-label">Overview</div>
-        <a class="sidebar-link" href="dashboard.html">
-          <span class="icon">&#9673;</span> Dashboard
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">Work</div>
-        <a class="sidebar-link" href="issues.html">
-          <span class="icon">&#9634;</span> Issues
-          <span class="sidebar-badge">4</span>
-        </a>
-        <a class="sidebar-link" href="passes.html">
-          <span class="icon">&#9654;</span> Passes
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">System</div>
-        <a class="sidebar-link" href="plugins.html">
-          <span class="icon">&#9881;</span> Plugins
-        </a>
-      </div>
-    </aside>
-
-    <main id="content">
-      <div class="page-header">
-        <h1>Plugins</h1>
-        <p>Installed pipeline plugins and their configuration status.</p>
-      </div>
-
-      <div class="card">
-        <div class="table-wrap"><table>
-          <thead><tr><th>Plugin</th><th>Version</th><th>Stage</th><th>Status</th><th>Enabled</th></tr></thead>
-          <tbody id="plugin-list">
-            <tr>
-              <td><code>loop-build</code></td><td>0.7.2</td>
-              <td><span class="badge badge--blue">build</span></td>
-              <td><span class="badge badge--green">active</span></td>
-              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
-            </tr>
-            <tr>
-              <td><code>loop-review</code></td><td>0.7.2</td>
-              <td><span class="badge badge--purple">review</span></td>
-              <td><span class="badge badge--green">active</span></td>
-              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
-            </tr>
-            <tr>
-              <td><code>loop-automerge</code></td><td>0.7.2</td>
-              <td><span class="badge badge--yellow">automerge</span></td>
-              <td><span class="badge badge--green">active</span></td>
-              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
-            </tr>
-            <tr>
-              <td><code>loop-spec</code></td><td>0.7.0</td>
-              <td><span class="badge badge--green">spec</span></td>
-              <td><span class="badge badge--green">active</span></td>
-              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
-            </tr>
-            <tr>
-              <td><code>loop-sync</code></td><td>0.7.1</td>
-              <td><span class="badge badge--blue">sync</span></td>
-              <td><span class="badge badge--yellow">paused</span></td>
-              <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
-            </tr>
-          </tbody>
-        </table></div>
-      </div>
-
-    </main>
+<main class="main-content">
+  <div class="page-header">
+    <h1>Plugins</h1>
+    <p>Manage pipeline plugins and their configuration</p>
   </div>
 
-  <script src="static/app.js"></script>
+  <!-- Plugin Grid -->
+  <div class="plugin-grid" id="plugin-grid">
+    <div class="plugin-card">
+      <h3>⬡ Build Engine</h3>
+      <p class="plugin-desc">Core build pass engine. Manages worktrees, runs pass_start/pass_end, ships to branches.</p>
+      <div class="plugin-meta">
+        <span class="badge badge-success">active</span>
+        <span>v2.1.0</span>
+        <span class="text-muted">REA-84</span>
+      </div>
+    </div>
+
+    <div class="plugin-card">
+      <h3>⟳ Review Engine</h3>
+      <p class="plugin-desc">Code review pass engine. Reads diffs, evaluates against acceptance criteria, approves or rejects.</p>
+      <div class="plugin-meta">
+        <span class="badge badge-success">active</span>
+        <span>v2.0.1</span>
+        <span class="text-muted">REA-85</span>
+      </div>
+    </div>
+
+    <div class="plugin-card">
+      <h3>◉ Linear Sync</h3>
+      <p class="plugin-desc">Bidirectional Linear integration: reads issue queue, writes comments, manages labels and state transitions.</p>
+      <div class="plugin-meta">
+        <span class="badge badge-success">active</span>
+        <span>v1.9.3</span>
+        <span class="text-muted">REA-82</span>
+      </div>
+    </div>
+
+    <div class="plugin-card">
+      <h3>⊡ GitHub Bridge</h3>
+      <p class="plugin-desc">GitHub PR automation: creates PRs on review approval, merges on green CI. No manual PR creation.</p>
+      <div class="plugin-meta">
+        <span class="badge badge-info">configuring</span>
+        <span>v0.5.0</span>
+        <span class="text-muted">REA-99</span>
+      </div>
+    </div>
+
+    <div class="plugin-card">
+      <h3>⚙ Config Manager</h3>
+      <p class="plugin-desc">Hot-reload loop.toml configuration, sync skills, manage instance profiles without restart.</p>
+      <div class="plugin-meta">
+        <span class="badge badge-warning">disabled</span>
+        <span>v0.3.1</span>
+        <span class="text-muted">REA-96</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plugin Config Section -->
+  <div class="card mb-md" style="margin-top: 24px;">
+    <div class="card-header">
+      <h2>Global Plugin Settings</h2>
+      <span class="card-subtitle" id="config-source">Source: loop.toml</span>
+    </div>
+    <pre># Plugin configuration (loop.toml)
+[pipeline]
+automerge = true
+schedule_build = "5m"
+schedule_review = "5m"
+
+[agents]
+build_workers = 2
+
+[plugins]
+linear = { enabled = true, team_key = "REA" }
+github = { enabled = false }
+review = { enabled = true, strict_mode = true }</pre>
+  </div>
+
+  <!-- Health -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Plugin Health</h2>
+      <span class="card-subtitle" id="health-status">All core plugins healthy</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Plugin</th>
+            <th>Status</th>
+            <th>Last Heartbeat</th>
+            <th>Uptime</th>
+          </tr>
+        </thead>
+        <tbody id="health-tbody">
+          <tr>
+            <td>Build Engine</td>
+            <td><span class="badge badge-success">healthy</span></td>
+            <td class="mono text-sm">10:44:55</td>
+            <td class="mono text-sm">14d 3h</td>
+          </tr>
+          <tr>
+            <td>Review Engine</td>
+            <td><span class="badge badge-success">healthy</span></td>
+            <td class="mono text-sm">10:39:30</td>
+            <td class="mono text-sm">14d 3h</td>
+          </tr>
+          <tr>
+            <td>Linear Sync</td>
+            <td><span class="badge badge-success">healthy</span></td>
+            <td class="mono text-sm">10:42:00</td>
+            <td class="mono text-sm">14d 3h</td>
+          </tr>
+          <tr>
+            <td>GitHub Bridge</td>
+            <td><span class="badge badge-muted">offline</span></td>
+            <td class="mono text-sm">—</td>
+            <td class="mono text-sm">—</td>
+          </tr>
+          <tr>
+            <td>Config Manager</td>
+            <td><span class="badge badge-muted">disabled</span></td>
+            <td class="mono text-sm">—</td>
+            <td class="mono text-sm">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
 </body>
 </html>

@@ -7,21 +7,21 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="status-page">
-  <main>
-    <div class="card">
+  <main class="status-main">
+    <div class="card status-card">
       <h1>hermes-loop-r2 daemon</h1>
       <div class="status-row">
-        <span class="status-label">Status</span>
-        <span class="status-value">
-          <span class="indicator indicator--alive"></span>
+        <span class="stat-label">Status</span>
+        <span class="stat-value">
+          <span class="status-dot-live"></span>
           ${status}
         </span>
       </div>
       <div class="status-row">
-        <span class="status-label">Version</span>
-        <span class="status-value">${version}</span>
+        <span class="stat-label">Version</span>
+        <span class="stat-value">${version}</span>
       </div>
-      <div class="version">loop is alive</div>
+      <p class="status-tagline">loop is alive</p>
     </div>
   </main>
 </body>

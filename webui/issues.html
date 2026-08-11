@@ -1,73 +1,172 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Issues — hermes-loop-r2</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Issues — Hermes Loop r2</title>
   <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
 
-  <nav id="topnav">
-    <a class="nav-brand" href="dashboard.html">
-      <span class="dot"></span> hermes-loop-r2
+<nav class="top-nav">
+  <a href="dashboard.html" class="nav-brand">
+    <span class="logo">◈</span>
+    Hermes Loop
+    <span class="version">r2</span>
+  </a>
+  <div class="nav-links">
+    <a href="dashboard.html">Dashboard</a>
+    <a href="issues.html" class="active">Issues</a>
+    <a href="passes.html">Passes</a>
+    <a href="plugins.html">Plugins</a>
+  </div>
+  <div class="nav-status">
+    <span><span class="status-dot"></span> Engine running</span>
+  </div>
+</nav>
+
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-label">Overview</div>
+    <a href="dashboard.html" class="sidebar-link">
+      <span class="icon">⊞</span> Dashboard
     </a>
-    <ul class="nav-links">
-      <li><a href="dashboard.html">Dashboard</a></li>
-      <li><a href="issues.html">Issues</a></li>
-      <li><a href="passes.html">Passes</a></li>
-      <li><a href="plugins.html">Plugins</a></li>
-    </ul>
-    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
-  </nav>
+    <a href="issues.html" class="sidebar-link active">
+      <span class="icon">⊡</span> Issues
+      <span class="badge" id="sidebar-open-count">3</span>
+    </a>
+    <a href="passes.html" class="sidebar-link">
+      <span class="icon">⟳</span> Passes
+    </a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Configuration</div>
+    <a href="plugins.html" class="sidebar-link">
+      <span class="icon">⬡</span> Plugins
+      <span class="badge" id="sidebar-plugin-count">5</span>
+    </a>
+    <a href="issues.html" class="sidebar-link">
+      <span class="icon">⚙</span> Settings
+    </a>
+  </div>
+</aside>
 
-  <div id="shell">
-    <aside id="sidebar">
-      <div class="sidebar-section">
-        <div class="sidebar-label">Overview</div>
-        <a class="sidebar-link" href="dashboard.html">
-          <span class="icon">&#9673;</span> Dashboard
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">Work</div>
-        <a class="sidebar-link" href="issues.html">
-          <span class="icon">&#9634;</span> Issues
-          <span class="sidebar-badge">4</span>
-        </a>
-        <a class="sidebar-link" href="passes.html">
-          <span class="icon">&#9654;</span> Passes
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">System</div>
-        <a class="sidebar-link" href="plugins.html">
-          <span class="icon">&#9881;</span> Plugins
-        </a>
-      </div>
-    </aside>
-
-    <main id="content">
-      <div class="page-header">
-        <h1>Issues</h1>
-        <p>Agent-ready issues queued for the build pipeline.</p>
-      </div>
-
-      <div class="card">
-        <div class="table-wrap"><table>
-          <thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th><th>Assigned</th></tr></thead>
-          <tbody id="issue-list">
-            <tr><td><code>REA-98</code></td><td>Web UI skeleton — static HTML/CSS dark theme scaffold</td><td><span class="badge badge--purple">High</span></td><td><span class="badge badge--blue">In Progress</span></td><td>build</td></tr>
-            <tr><td><code>REA-97</code></td><td>Add Linear event integration (REA-128 follow-up)</td><td><span class="badge badge--green">Medium</span></td><td><span class="badge badge--yellow">In Review</span></td><td>review</td></tr>
-            <tr><td><code>REA-99</code></td><td>Plugin config editor with JSON schema validation</td><td><span class="badge badge--green">Medium</span></td><td><span class="badge badge--blue">Ready</span></td><td>—</td></tr>
-            <tr><td><code>REA-100</code></td><td>Pass controls: pause/resume pipeline stages</td><td><span class="badge badge--red">Low</span></td><td><span class="badge badge--blue">Ready</span></td><td>—</td></tr>
-          </tbody>
-        </table></div>
-      </div>
-
-    </main>
+<main class="main-content">
+  <div class="page-header">
+    <h1>Issues</h1>
+    <p>Queued and in-progress issues from Linear</p>
   </div>
 
-  <script src="static/app.js"></script>
+  <!-- Queue Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Open</div>
+      <div class="stat-value" id="open-count">3</div>
+      <div class="stat-change">2 ready · 1 blocked</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">In Progress</div>
+      <div class="stat-value" id="in-progress-count">1</div>
+      <div class="stat-change">REA-98</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">In Review</div>
+      <div class="stat-value" id="in-review-count">2</div>
+      <div class="stat-change">Awaiting review pass</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Done (24h)</div>
+      <div class="stat-value" id="done-count">7</div>
+      <div class="stat-change up">+2 vs yesterday</div>
+    </div>
+  </div>
+
+  <!-- Issue Queue Table -->
+  <div class="card mb-md">
+    <div class="card-header">
+      <h2>Issue Queue</h2>
+      <span class="card-subtitle" id="queue-total">8 issues total</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Age</th>
+          </tr>
+        </thead>
+        <tbody id="issues-tbody">
+          <tr>
+            <td class="mono">REA-98</td>
+            <td>Web UI skeleton — static HTML/CSS dark theme</td>
+            <td><span class="badge badge-info">in progress</span></td>
+            <td><span class="badge badge-warning">high</span></td>
+            <td class="text-muted mono">2h</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-99</td>
+            <td>GitHub PR automation — open/merge from review approval</td>
+            <td><span class="badge badge-info">ready</span></td>
+            <td><span class="badge badge-warning">high</span></td>
+            <td class="text-muted mono">1d</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-100</td>
+            <td>Dashboard API: GET /api/queue and GET /api/passes</td>
+            <td><span class="badge badge-info">ready</span></td>
+            <td><span class="badge badge-muted">medium</span></td>
+            <td class="text-muted mono">3d</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-96</td>
+            <td>Plugin hot-reload on config change</td>
+            <td><span class="badge badge-warning">blocked</span></td>
+            <td><span class="badge badge-muted">medium</span></td>
+            <td class="text-muted mono">4d</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-93</td>
+            <td>Linear CLI: bulk-label command for batch operations</td>
+            <td><span class="badge badge-muted">backlog</span></td>
+            <td><span class="badge badge-muted">low</span></td>
+            <td class="text-muted mono">6d</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Blocked Issues -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Blocked Issues</h2>
+      <span class="card-subtitle" id="blocked-count">1 blocked</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Blocked Since</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="blocked-tbody">
+          <tr>
+            <td class="mono">REA-96</td>
+            <td>Plugin hot-reload on config change</td>
+            <td class="text-muted mono">Aug 8, 2026</td>
+            <td>Awaiting plugin registry refactor (REA-94)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
 </body>
 </html>
