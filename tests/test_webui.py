@@ -148,21 +148,71 @@ def test_path_traversal_rejected() -> None:
     assert status == 400
 
 
-# ── AC-3: /health unchanged ──────────────────────────────────────────
+# ── AC-3: /health (REA-89 AC-5) ──────────────────────────────────────
+
+EXPECTED_HEALTH_KEYS = (
+    "uptime_seconds",
+    "passes_completed",
+    "passes_failed",
+    "plugins",
+    "queue_depth",
+    "last_pass_at",
+)
 
 
-def test_health_returns_json() -> None:
+def test_health_returns_json_with_expected_keys() -> None:
+    """REA-89 AC-5: /health returns valid JSON with all expected keys."""
+
     def fake_health() -> dict:
-        return {"uptime_seconds": 42, "status": "ok"}
+        return {
+            "uptime_seconds": 42.5,
+            "passes_completed": 7,
+            "passes_failed": 1,
+            "plugins": {"discord": "ok", "slack": "failed"},
+            "queue_depth": 3,
+            "last_pass_at": "2026-08-11T12:00:00Z",
+        }
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with _ServerFixture(root, health_provider=fake_health) as srv:
         status, body, ct = _read_url(srv.url("/health"))
+
+    assert status == 200
+    assert "application/json" in ct
+
+    data = json.loads(body)
+
+    # Verify every expected key is present with correct type
+    assert isinstance(data["uptime_seconds"], (int, float))
+    assert isinstance(data["passes_completed"], int)
+    assert isinstance(data["passes_failed"], int)
+    assert isinstance(data["plugins"], dict)
+    assert isinstance(data["queue_depth"], int)
+    assert isinstance(data["last_pass_at"], str)
+
+    # Verify exact values
+    assert data["uptime_seconds"] == 42.5
+    assert data["passes_completed"] == 7
+    assert data["passes_failed"] == 1
+    assert data["plugins"] == {"discord": "ok", "slack": "failed"}
+    assert data["queue_depth"] == 3
+    assert data["last_pass_at"] == "2026-08-11T12:00:00Z"
+
+
+def test_health_returns_200_and_correct_content_type() -> None:
+    """The /health endpoint returns status 200 and Content-Type application/json."""
+
+    def fake_health() -> dict:
+        return {"uptime_seconds": 0}
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, health_provider=fake_health) as srv:
+        status, body, ct = _read_url(srv.url("/health"))
+
     assert status == 200
     assert "application/json" in ct
     data = json.loads(body)
-    assert data["uptime_seconds"] == 42
-    assert data["status"] == "ok"
+    assert data["uptime_seconds"] == 0
 
 
 def test_health_absent_when_no_provider() -> None:

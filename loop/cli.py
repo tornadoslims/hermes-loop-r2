@@ -19,6 +19,7 @@ from loop.daemon import SelfHealer
 from loop.events import DaemonStarted, DaemonStopping, PassCompleted, PassFailed, PassStarted
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
 from loop.scheduler import PassEvent, Scheduler, SchedulerConfigError, parse_duration, parse_schedule_override
+from loop.watcher import WatcherService
 from loop.webui import WebUIServer
 
 
@@ -380,6 +381,17 @@ def cmd_serve(args) -> int:
     scheduler_ref["scheduler"] = scheduler
     scheduler.start()
 
+    # REA-126 AC-3: start the watcher if enabled in loop.toml.
+    # The watcher polls the target repo for new commits and triggers
+    # immediate review ticks, independent of the pipeline schedule.
+    watcher = WatcherService(
+        config=config.watcher,
+        repo_path=config.target_repo_path,
+        scheduler=scheduler,
+        event_bus=manager.bus,
+    )
+    watcher.start()
+
     webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot, project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
@@ -399,6 +411,7 @@ def cmd_serve(args) -> int:
         manager.emit(DaemonStopping(reason="keyboard_interrupt", timestamp=datetime.now()))
     finally:
         scheduler.stop()
+        watcher.stop()
         manager.stop_all()
         webui.stop()
     return 0

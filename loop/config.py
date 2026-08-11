@@ -99,10 +99,17 @@ class EventsConfig:
 
 
 @dataclass
+class WatcherConfig:
+    enabled: bool = False
+    poll_interval: str = "15s"
+
+
+@dataclass
 class Config:
     path: str
     raw: Dict[str, Any]
     root: str
+    target_repo_path: str
     plugins: PluginsConfig
     pipeline: PipelineConfig
     events: EventsConfig
