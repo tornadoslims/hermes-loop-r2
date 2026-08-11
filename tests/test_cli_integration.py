@@ -195,3 +195,139 @@ def test_watchdog_detects_stall_with_ready_queue_and_old_commit(tmp_path, capsys
     assert "REA-1" not in report["detail"]  # detail is a count, not issue ids
     assert "1 ready issue" in report["detail"]
 
+
+# ------------------------------------------------------------- REA-122
+
+
+def test_init_creates_expected_files_and_parsable_toml(tmp_path, capsys):
+    """loop init on an empty tmp dir creates the expected files/dirs and a
+    loop.toml that load_config() parses without error."""
+    from loop.config import load_config
+
+    target = tmp_path / "myinstance"
+    rc = main(["init", str(target)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Initialized" in out
+
+    assert (target / "loop.toml").is_file()
+    assert (target / "plugins").is_dir()
+    assert (target / "webui" / "static").is_dir()
+    assert (target / "webui" / "templates").is_dir()
+    assert (target / ".env.example").is_file()
+
+    # loop.toml must be parsable.
+    cfg = load_config(str(target / "loop.toml"))
+    assert cfg.plugins.dir
+    assert cfg.pipeline.schedule_build
+    assert cfg.events.log_file
+
+    # .env.example lists the known env vars.
+    env_text = (target / ".env.example").read_text()
+    assert "LINEAR_API_KEY" in env_text
+    assert "GITHUB_TOKEN" in env_text
+
+
+def test_init_refuses_overwrite_without_force(tmp_path, capsys):
+    """loop init without --force on a dir that already has loop.toml exits
+    non-zero and does not overwrite it."""
+    target = tmp_path / "myinstance"
+    target.mkdir()
+    (target / "loop.toml").write_text("[plugins]\\ndir = \"custom\"\\n")
+    original = (target / "loop.toml").read_text()
+
+    rc = main(["init", str(target)])
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "already exists" in stderr
+    assert (target / "loop.toml").read_text() == original
+
+
+def test_init_force_overwrites_existing_toml(tmp_path, capsys):
+    """loop init --force on a dir with an existing loop.toml overwrites it."""
+    target = tmp_path / "myinstance"
+    target.mkdir()
+    (target / "loop.toml").write_text("[plugins]\\ndir = \"custom\"\\n")
+
+    rc = main(["init", "--force", str(target)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Initialized" in out
+
+    content = (target / "loop.toml").read_text()
+    assert "schedule_build" in content
+    assert "[pipeline]" in content
+
+
+def test_status_parses_health_payload(tmp_path, capsys):
+    """loop status against a fake HTTP server returns the parsed fields."""
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class FakeHealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/health":
+                payload = json.dumps({
+                    "uptime_seconds": 3661.0,
+                    "passes_completed": 10,
+                    "passes_failed": 2,
+                    "plugins": {"linear": {"healthy": True}},
+                    "queue_depth": 3,
+                    "last_pass_at": "2025-08-11T12:34:56",
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    # Bind to port 0 to get an available port.
+    server = HTTPServer(("127.0.0.1", 0), FakeHealthHandler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    try:
+        rc = main(["status", "--host", "127.0.0.1", "--port", str(port)])
+    finally:
+        server.shutdown()
+        server.server_close()
+        t.join(timeout=2)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "up 1h 1m 1s" in out
+    assert "10 completed" in out
+    assert "2 failed" in out
+    assert "all healthy" in out
+    assert "queue depth:    3" in out
+    assert "last pass:      2025-08-11T12:34:56" in out
+
+
+def test_status_daemon_not_running(tmp_path, capsys):
+    """loop status against a closed port reports daemon-not-running and exits
+    non-zero."""
+    rc = main(["status", "--host", "127.0.0.1", "--port", "19999"])
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "daemon not running" in stderr
+    assert "127.0.0.1:19999" in stderr
+
+
+def test_cli_help_lists_new_subcommands():
+    """loop --help lists init and status with one-line descriptions."""
+    result = subprocess.run(
+        [sys.executable, "-m", "loop.cli", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "init" in result.stdout
+    assert "status" in result.stdout
+

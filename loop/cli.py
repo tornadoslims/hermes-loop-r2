@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import textwrap
 import time
+import urllib.error
+import urllib.request
 
 from datetime import datetime
 from typing import Dict, Optional
@@ -238,6 +242,141 @@ def cmd_version(args) -> int:
     return 0
 
 
+_INIT_TOML = textwrap.dedent("""\
+    [plugins]
+    # Directory for plugin modules, relative to this config file.
+    dir = "plugins"
+    # Plugin names to load (in order), each matching a .py file in `dir`.
+    enabled = []
+
+    [plugins.config.linear]
+    # team_key = "REA"      # optional; overrides LINEAR_TEAM_KEY env var
+
+    [plugins.config.github]
+    # repo = "owner/name"   # optional; overrides GITHUB_REPO env var
+
+    [pipeline]
+    schedule_build = "5m"
+    schedule_review = "5m"
+    pass_timeout = "30m"
+    stall_timeout = "30m"
+    queue_warn_ticks = 3
+
+    [events]
+    log_file = "events.jsonl"
+""")
+
+_ENV_EXAMPLE = textwrap.dedent("""\
+    # Linear API (required for LinearPlugin)
+    LINEAR_API_KEY=lin_api_...
+    LINEAR_TEAM_KEY=REA
+    # LINEAR_RETRY_MAX_ATTEMPTS=3
+    # LINEAR_RETRY_BASE_DELAY_SECONDS=1.0
+
+    # GitHub API (required for GitHubPlugin)
+    GITHUB_TOKEN=ghp_...
+    GITHUB_REPO=owner/name
+    # GITHUB_RETRY_MAX_ATTEMPTS=3
+    # GITHUB_RETRY_BASE_DELAY_SECONDS=1.0
+
+    # Optional: path to a custom .env file
+    # HERMES_LOOP_ENV_PATH=
+""")
+
+
+def cmd_init(args) -> int:
+    """Scaffold a new hermes-loop instance directory."""
+    target = os.path.abspath(args.dir)
+    toml_path = os.path.join(target, "loop.toml")
+
+    if os.path.isfile(toml_path) and not args.force:
+        print(f"loop.toml already exists at {toml_path!r}. Use --force to overwrite.",
+              file=sys.stderr)
+        return 1
+
+    os.makedirs(os.path.join(target, "plugins"), exist_ok=True)
+    os.makedirs(os.path.join(target, "webui", "static"), exist_ok=True)
+    os.makedirs(os.path.join(target, "webui", "templates"), exist_ok=True)
+
+    # Write loop.toml (overwrites if --force, or creates new)
+    with open(toml_path, "w") as f:
+        f.write(_INIT_TOML)
+
+    env_path = os.path.join(target, ".env.example")
+    with open(env_path, "w") as f:
+        f.write(_ENV_EXAMPLE)
+
+    print(f"Initialized {target!r}")
+    return 0
+
+
+def _format_uptime(seconds: float) -> str:
+    """Human-readable uptime from fractional seconds."""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m or h:
+        parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return " ".join(parts)
+
+
+def cmd_status(args) -> int:
+    """GET /health on the running daemon and print a human-readable summary."""
+    url = f"http://{args.host}:{args.port}/health"
+    req = urllib.request.Request(url)
+    req.add_header("Accept", "application/json")
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+    except urllib.error.URLError as e:
+        print(f"daemon not running at {url} ({e.reason})", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"daemon not running at {url} ({e})", file=sys.stderr)
+        return 1
+
+    if resp.status != 200:
+        print(f"daemon not running at {url} (HTTP {resp.status})", file=sys.stderr)
+        return 1
+
+    data = json.loads(resp.read())
+
+    uptime = _format_uptime(data.get("uptime_seconds", 0))
+    completed = data.get("passes_completed", 0)
+    failed = data.get("passes_failed", 0)
+    total = completed + failed
+    plugins = data.get("plugins", {})
+    queue_depth = data.get("queue_depth")
+    last_pass_at = data.get("last_pass_at")
+
+    print(f"daemon:         up {uptime}")
+    print(f"passes:         {completed} completed, {failed} failed ({total} total)")
+
+    unhealthy = {name: info for name, info in plugins.items()
+                 if not info.get("healthy", True)}
+    if unhealthy:
+        for name, info in unhealthy.items():
+            error = info.get("error", "unknown")
+            print(f"  plugin {name}: UNHEALTHY ({error})")
+    else:
+        print(f"plugins:        {len(plugins)} loaded, all healthy")
+
+    if queue_depth is not None:
+        print(f"queue depth:    {queue_depth}")
+    else:
+        print("queue depth:    unknown (no Linear plugin)")
+
+    if last_pass_at:
+        print(f"last pass:      {last_pass_at}")
+    else:
+        print("last pass:      none")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loop", description="hermes-loop-r2 daemon and CLI")
     parser.add_argument("--config", default=None, help="path to loop.toml or its directory (default: search upward from cwd)")
@@ -272,6 +411,16 @@ def build_parser() -> argparse.ArgumentParser:
              "ready work in the queue. Exit 2 if stalled, 0 if not.",
     )
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser("init", help="scaffold a new instance directory")
+    p.add_argument("dir", nargs="?", default=".", help="target directory (default: cwd)")
+    p.add_argument("--force", action="store_true", help="overwrite an existing loop.toml")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("status", help="query the running daemon's /health endpoint")
+    p.add_argument("--host", default="localhost", help="daemon host (default: localhost)")
+    p.add_argument("--port", type=int, default=8765, help="daemon port (default: 8765)")
+    p.set_defaults(func=cmd_status)
 
     return parser
 
