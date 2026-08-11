@@ -1,113 +1,186 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard — hermes-loop-r2</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — Hermes Loop r2</title>
   <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
 
-  <nav id="topnav">
-    <a class="nav-brand" href="dashboard.html">
-      <span class="dot"></span> hermes-loop-r2
+<!-- Top Nav Bar -->
+<nav class="top-nav">
+  <a href="dashboard.html" class="nav-brand">
+    <span class="logo">◈</span>
+    Hermes Loop
+    <span class="version">r2</span>
+  </a>
+  <div class="nav-links">
+    <a href="dashboard.html" class="active">Dashboard</a>
+    <a href="issues.html">Issues</a>
+    <a href="passes.html">Passes</a>
+    <a href="plugins.html">Plugins</a>
+  </div>
+  <div class="nav-status">
+    <span><span class="status-dot"></span> Engine running</span>
+    <span>Uptime 14d 3h</span>
+  </div>
+</nav>
+
+<!-- Left Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-label">Overview</div>
+    <a href="dashboard.html" class="sidebar-link active">
+      <span class="icon">⊞</span> Dashboard
     </a>
-    <ul class="nav-links">
-      <li><a href="dashboard.html">Dashboard</a></li>
-      <li><a href="issues.html">Issues</a></li>
-      <li><a href="passes.html">Passes</a></li>
-      <li><a href="plugins.html">Plugins</a></li>
-    </ul>
-    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
-  </nav>
+    <a href="issues.html" class="sidebar-link">
+      <span class="icon">⊡</span> Issues
+      <span class="badge" id="sidebar-open-count">3</span>
+    </a>
+    <a href="passes.html" class="sidebar-link">
+      <span class="icon">⟳</span> Passes
+    </a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Configuration</div>
+    <a href="plugins.html" class="sidebar-link">
+      <span class="icon">⬡</span> Plugins
+      <span class="badge" id="sidebar-plugin-count">5</span>
+    </a>
+    <a href="issues.html" class="sidebar-link">
+      <span class="icon">⚙</span> Settings
+    </a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Health</div>
+    <a href="dashboard.html" class="sidebar-link">
+      <span class="icon">◉</span> System
+      <span class="badge badge-success">OK</span>
+    </a>
+    <a href="passes.html" class="sidebar-link">
+      <span class="icon">◎</span> Logs
+    </a>
+  </div>
+</aside>
 
-  <div id="shell">
-    <aside id="sidebar">
-      <div class="sidebar-section">
-        <div class="sidebar-label">Overview</div>
-        <a class="sidebar-link" href="dashboard.html">
-          <span class="icon">&#9673;</span> Dashboard
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">Work</div>
-        <a class="sidebar-link" href="issues.html">
-          <span class="icon">&#9634;</span> Issues
-          <span class="sidebar-badge">4</span>
-        </a>
-        <a class="sidebar-link" href="passes.html">
-          <span class="icon">&#9654;</span> Passes
-        </a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-label">System</div>
-        <a class="sidebar-link" href="plugins.html">
-          <span class="icon">&#9881;</span> Plugins
-        </a>
-      </div>
-    </aside>
-
-    <main id="content">
-      <div class="page-header">
-        <h1>Dashboard</h1>
-        <p>Live daemon overview and pipeline metrics.</p>
-      </div>
-
-      <div class="stat-grid">
-        <div class="stat">
-          <div class="stat-label">Daemon</div>
-          <div class="stat-value">
-            <span class="indicator indicator--alive"></span> Alive
-          </div>
-          <div class="stat-sub" id="daemon-version">v0.7.2</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Queue Depth</div>
-          <div class="stat-value" id="queue-depth">3</div>
-          <div class="stat-sub">pending builds</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Today's Passes</div>
-          <div class="stat-value" id="passes-today">12</div>
-          <div class="stat-sub">8 shipped, 2 blocked, 2 idle</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Pipeline Health</div>
-          <div class="stat-value" style="color: var(--accent-green);">&#10003;</div>
-          <div class="stat-sub">all stages passing</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header"><h2>Recent Passes</h2></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Time</th><th>Pass</th><th>Role</th><th>Issue</th><th>Outcome</th></tr></thead>
-          <tbody id="recent-passes">
-            <tr><td>14:52 UTC</td><td><code>#117</code></td><td>build</td><td><code>REA-97</code></td><td><span class="badge badge--green">shipped</span></td></tr>
-            <tr><td>14:51 UTC</td><td><code>#116</code></td><td>review</td><td><code>REA-96</code></td><td><span class="badge badge--green">approved</span></td></tr>
-            <tr><td>14:46 UTC</td><td><code>#115</code></td><td>build</td><td><code>REA-95</code></td><td><span class="badge badge--green">shipped</span></td></tr>
-            <tr><td>14:40 UTC</td><td><code>#114</code></td><td>review</td><td><code>REA-94</code></td><td><span class="badge badge--red">changes-requested</span></td></tr>
-            <tr><td>14:35 UTC</td><td><code>#113</code></td><td>build</td><td><code>REA-93</code></td><td><span class="badge badge--green">shipped</span></td></tr>
-          </tbody>
-        </table></div>
-      </div>
-
-      <div class="card">
-        <div class="card-header"><h2>Pipeline Stages</h2></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Stage</th><th>Status</th><th>Last Run</th></tr></thead>
-          <tbody id="pipeline-stages">
-            <tr><td><code>loop-spec</code></td><td><span class="badge badge--green">ready</span></td><td>2 min ago</td></tr>
-            <tr><td><code>loop-build</code></td><td><span class="badge badge--blue">running</span></td><td>now</td></tr>
-            <tr><td><code>loop-review</code></td><td><span class="badge badge--green">ready</span></td><td>1 min ago</td></tr>
-            <tr><td><code>loop-automerge</code></td><td><span class="badge badge--yellow">waiting</span></td><td>4 min ago</td></tr>
-          </tbody>
-        </table></div>
-      </div>
-
-    </main>
+<!-- Main Content -->
+<main class="main-content">
+  <div class="page-header">
+    <h1>Dashboard</h1>
+    <p>Real-time overview of the hermes-loop pipeline</p>
   </div>
 
-  <script src="static/app.js"></script>
+  <!-- Stats Grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Queue Depth</div>
+      <div class="stat-value" id="queue-depth">3</div>
+      <div class="stat-change up">+2 this hour</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Builds</div>
+      <div class="stat-value" id="active-builds">1</div>
+      <div class="stat-change">REA-98 in progress</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Pass Rate (24h)</div>
+      <div class="stat-value" id="pass-rate">87%</div>
+      <div class="stat-change up">+3% vs yesterday</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg Cycle Time</div>
+      <div class="stat-value" id="cycle-time">4.2</div>
+      <div class="stat-change down">min</div>
+    </div>
+  </div>
+
+  <!-- Recent Activity -->
+  <div class="card mb-md">
+    <div class="card-header">
+      <h2>Recent Passes</h2>
+      <span class="card-subtitle" id="recent-passes-count">Last 24 hours</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Issue</th>
+            <th>Pass</th>
+            <th>Status</th>
+            <th>Duration</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="recent-passes-tbody">
+          <tr>
+            <td class="mono">REA-97</td>
+            <td>build</td>
+            <td><span class="badge badge-success">shipped</span></td>
+            <td class="mono">2.1m</td>
+            <td class="text-muted text-sm">10:42 AM</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-97</td>
+            <td>review</td>
+            <td><span class="badge badge-success">approved</span></td>
+            <td class="mono">0.3m</td>
+            <td class="text-muted text-sm">10:39 AM</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-96</td>
+            <td>build</td>
+            <td><span class="badge badge-warning">blocked</span></td>
+            <td class="mono">—</td>
+            <td class="text-muted text-sm">09:15 AM</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-95</td>
+            <td>build</td>
+            <td><span class="badge badge-success">shipped</span></td>
+            <td class="mono">3.4m</td>
+            <td class="text-muted text-sm">08:50 AM</td>
+          </tr>
+          <tr>
+            <td class="mono">REA-95</td>
+            <td>review</td>
+            <td><span class="badge badge-danger">rejected</span></td>
+            <td class="mono">0.5m</td>
+            <td class="text-muted text-sm">08:47 AM</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pipeline Health -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Pipeline Health</h2>
+      <span class="card-subtitle" id="pipeline-state">State: running</span>
+    </div>
+    <div class="log-entry info">
+      <span class="log-time">10:42:15</span>
+      <span class="mock-label">mock</span>
+      Build pass REA-97 shipped successfully
+    </div>
+    <div class="log-entry success">
+      <span class="log-time">10:41:01</span>
+      <span class="mock-label">mock</span>
+      Verification passed: lint ok, 14 tests passed
+    </div>
+    <div class="log-entry info">
+      <span class="log-time">10:39:22</span>
+      <span class="mock-label">mock</span>
+      Review pass REA-97 approved — branch merged
+    </div>
+    <div class="log-entry warn">
+      <span class="log-time">10:35:00</span>
+      <span class="mock-label">mock</span>
+      Rate limit warning: 7 calls/min threshold approaching
+    </div>
+  </div>
+</main>
+
 </body>
 </html>
