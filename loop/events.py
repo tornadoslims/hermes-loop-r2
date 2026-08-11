@@ -161,6 +161,23 @@ class DaemonStopping:
     timestamp: datetime
 
 
+@dataclass
+class WatcherCommitDetected:
+    """REA-126 AC-5: the watcher detected a new commit on the target repo's default branch."""
+
+    commit_hash: str
+    timestamp: datetime
+
+
+@dataclass
+class WatcherTickTriggered:
+    """REA-126 AC-5: the watcher triggered an immediate review pass tick."""
+
+    role: str
+    commit_hash: str
+    timestamp: datetime
+
+
 ALL_EVENT_TYPES: tuple = (
     PassStarted,
     PassCompleted,
@@ -179,6 +196,8 @@ ALL_EVENT_TYPES: tuple = (
     StallEvent,
     DaemonStarted,
     DaemonStopping,
+    WatcherCommitDetected,
+    WatcherTickTriggered,
 )
 
 
