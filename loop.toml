@@ -1,0 +1,7 @@
+[plugins]
+dir = "plugins"
+enabled = ["linear"]
+
+[plugins.config.linear]
+# team_key = "REA"  # optional; only required if the Linear workspace has
+#                    # more than one team. Falls back to LINEAR_TEAM_KEY / .env.
