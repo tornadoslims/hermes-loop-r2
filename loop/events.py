@@ -189,6 +189,39 @@ class UpdateAvailable:
     timestamp: datetime
 
 
+@dataclass
+class WorkerStarted:
+    """A parallel worker started processing an issue."""
+
+    worker_id: str
+    role: str
+    issue_id: str
+    worktree: str
+    timestamp: datetime
+
+
+@dataclass
+class WorkerCompleted:
+    """A parallel worker finished processing an issue."""
+
+    worker_id: str
+    role: str
+    issue_id: str
+    outcome: str
+    timestamp: datetime
+
+
+@dataclass
+class WorkerCrashed:
+    """A parallel worker crashed or timed out."""
+
+    worker_id: str
+    role: str
+    issue_id: str
+    error: str
+    timestamp: datetime
+
+
 ALL_EVENT_TYPES: tuple = (
     PassStarted,
     PassCompleted,
@@ -210,6 +243,9 @@ ALL_EVENT_TYPES: tuple = (
     WatcherCommitDetected,
     WatcherTickTriggered,
     UpdateAvailable,
+    WorkerStarted,
+    WorkerCompleted,
+    WorkerCrashed,
 )
 
 

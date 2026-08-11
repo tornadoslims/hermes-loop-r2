@@ -23,6 +23,7 @@ from loop.watcher import WatcherService
 from loop.metrics import make_metrics_provider
 from loop.self_update import SelfUpdater
 from loop.webui import WebUIServer
+from loop.worker_pool import WorkerPool
 
 
 def _load_config_or_die(config_path):
@@ -43,7 +44,10 @@ def _resolve_schedule(config: Config, override: str | None):
     return {role: parse_duration(value) for role, value in raw.items()}
 
 
-def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dict[str, Optional[Scheduler]], self_updater: Optional[SelfUpdater] = None):
+def _make_tick_fn(manager: PluginManager, healer: SelfHealer,
+                  scheduler_ref: Dict[str, Optional[Scheduler]],
+                  self_updater: Optional[SelfUpdater] = None,
+                  worker_pool: Optional[WorkerPool] = None):
     """Tick body run on every scheduler tick (build and review).
 
     REA-89 wires the self-healing checks in here so they run on the
@@ -60,10 +64,14 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
     subprocess invocations driven by the daemon itself — no external
     cron needed.
 
-    REA-128: every tick also calls `self_updater.check()` to see if
+    REA-128: every tick also calls ``self_updater.check()`` to see if
     the engine's own git repo has new commits upstream. The check is
     rate-limited internally (default 30m cooldown) so it doesn't hit
     the network on every 5m tick.
+
+    When ``worker_pool`` is provided (from ``[agents]`` config), the
+    tick spawns N parallel workers instead of running a single agent
+    pass synchronously.
     """
 
     # REA-155: resolve the agent runner once (cheap — loads at tick time
@@ -83,7 +91,7 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
         start = time.monotonic()
         issue_id = ""
         try:
-            healer.check_stuck_passes()
+            healer.check_stuck_passes(worker_pool)
             healer.check_plugin_health()
             # REA-120: run on every tick (build and review), not just
             # build -- a stalled review handoff can happen regardless
@@ -135,12 +143,20 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
                     pass
                 healer.check_stall(scheduler_ref.get("scheduler"))
 
-                # REA-155: invoke the agent runner for the build pass.
-                _run_agent_build_pass(healer, manager, _get_runner)
+                if worker_pool is not None:
+                    # Parallel: spawn N build workers, don't wait for them.
+                    worker_pool.start_build_tick()
+                else:
+                    # Single-worker: run the agent synchronously.
+                    _run_agent_build_pass(healer, manager, _get_runner)
 
             elif role == "review":
-                # REA-155: invoke the agent runner for the review pass.
-                _run_agent_review_pass(healer, manager, _get_runner)
+                if worker_pool is not None:
+                    # Parallel: spawn N review workers, don't wait for them.
+                    worker_pool.start_review_tick()
+                else:
+                    # Single-worker: run the agent synchronously.
+                    _run_agent_review_pass(healer, manager, _get_runner)
 
         except Exception as e:  # noqa: BLE001 - surfaced as PassFailed, not raised
             healer.record_pass_failed(duration_s=time.monotonic() - start)
@@ -389,7 +405,18 @@ def cmd_serve(args) -> int:
     healer = SelfHealer(config, manager)
     self_updater = SelfUpdater(config, manager.emit)
     scheduler_ref: Dict[str, Optional[Scheduler]] = {"scheduler": None}
-    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager, healer, scheduler_ref, self_updater), notify=manager.notify)
+
+    # Create the worker pool if parallel agents are configured.
+    pool = WorkerPool(config, manager)
+    has_parallel = (pool.build_workers > 1 or pool.review_workers > 1)
+    worker_pool = pool if has_parallel else None
+
+    scheduler = Scheduler(
+        schedule=schedule,
+        tick_fn=_make_tick_fn(manager, healer, scheduler_ref, self_updater,
+                              worker_pool),
+        notify=manager.notify,
+    )
     scheduler_ref["scheduler"] = scheduler
     scheduler.start()
 
@@ -404,7 +431,8 @@ def cmd_serve(args) -> int:
     )
     watcher.start()
 
-    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot,
+    webui = WebUIServer(host=args.host, port=args.port,
+                        health_provider=lambda: healer.snapshot(worker_pool),
                         metrics_provider=make_metrics_provider(healer.snapshot), project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
@@ -575,6 +603,12 @@ _INIT_TOML = textwrap.dedent("""\
 
     [events]
     log_file = "events.jsonl"
+
+    [agents]
+    # Number of parallel build/review workers.
+    # Set to 1 (default) for single-worker mode.
+    build_workers = 1
+    review_workers = 1
 
     [self_update]
     enabled = true

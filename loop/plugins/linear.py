@@ -148,12 +148,16 @@ class LinearPlugin(Plugin):
         _load_env()
         self._api_key = self._config.get("api_key") or os.environ.get("LINEAR_API_KEY")
         self._team_key = self._config.get("team_key") or os.environ.get("LINEAR_TEAM_KEY")
+        self._project_name = self._config.get("project")
         if not self._api_key:
             raise LinearError(
                 "LINEAR_API_KEY not set (env, .env, or plugins.config.linear.api_key)"
             )
 
     def start(self) -> None:
+        # Ensure the configured project exists before any ticks fire.
+        if self._project_name:
+            self._ensure_project(self._project_name)
         self._started = True
 
     def stop(self) -> None:
@@ -231,6 +235,26 @@ class LinearPlugin(Plugin):
             {"input": {"name": name, "teamId": team["id"], "color": color}},
         )
         return data["issueLabelCreate"]["issueLabel"]["id"]
+
+    def _ensure_project(self, name: str) -> str:
+        """Find or create a project on the team. Returns the project id."""
+        api_key = self._require_api_key()
+        team = self._resolve_team()
+        data = _gql(api_key, "query { projects { nodes { id name } } }")
+        for p in data["projects"]["nodes"]:
+            if p["name"].lower() == name.lower():
+                return p["id"]
+        # Create it
+        data = _gql(
+            api_key,
+            """
+            mutation($input: ProjectCreateInput!) {
+              projectCreate(input: $input) { success project { id name } }
+            }
+            """,
+            {"input": {"name": name, "teamIds": [team["id"]]}},
+        )
+        return data["projectCreate"]["project"]["id"]
 
     def _move_state(self, issue_id: str, state_name: str) -> dict:
         team = self._resolve_team(include_states=True)

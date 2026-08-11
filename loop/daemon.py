@@ -96,13 +96,31 @@ class SelfHealer:
 
     # ------------------------------------------------------------ AC-1
 
-    def check_stuck_passes(self) -> List[RecoveryEvent]:
-        """Scan both worktrees' `.loop.pass.json` for staleness beyond
-        `pipeline.pass_timeout` and recover any that are stuck."""
+    def check_stuck_passes(self, worker_pool=None) -> List[RecoveryEvent]:
+        """Scan worktrees' ``.loop.pass.json`` for staleness beyond
+        ``pipeline.pass_timeout`` and recover any that are stuck.
+
+        When ``worker_pool`` is provided, scans all per-worker worktrees
+        (``worktrees/build-0/``, ``worktrees/build-1/``, etc.). Otherwise
+        falls back to the legacy single-worktree scan."""
         timeout_s = parse_duration(self.config.pipeline.pass_timeout)
         recovered: List[RecoveryEvent] = []
-        for role in ("build", "review"):
-            wt = worktree_path(self.config, role)
+
+        # Determine which worktree paths to scan.
+        wt_specs: List[tuple] = []
+        if worker_pool is not None:
+            for role in ("build", "review"):
+                indices = worker_pool.worktree_indices(role)
+                for idx in indices:
+                    wt = worktree_path(self.config, role, idx)
+                    wt_specs.append((role, wt))
+        else:
+            # Legacy: single worktree per role.
+            for role in ("build", "review"):
+                wt = worktree_path(self.config, role)
+                wt_specs.append((role, wt))
+
+        for role, wt in wt_specs:
             state_path = os.path.join(wt, STATE_FILENAME)
             if not os.path.isfile(state_path):
                 continue
@@ -622,9 +640,10 @@ class SelfHealer:
         self.last_pass_at = self._now()
         self.last_pass_duration = duration_s
 
-    def snapshot(self) -> Dict[str, Any]:
-        """`/health` payload (AC-5): uptime, pass totals, per-plugin
-        health, queue depth, and the last pass timestamp."""
+    def snapshot(self, worker_pool=None) -> Dict[str, Any]:
+        """``/health`` payload (AC-5): uptime, pass totals, per-plugin
+        health, queue depth, worker pool status, and the last pass
+        timestamp."""
         plugins: Dict[str, Any] = {}
         for lp in self.manager.plugins:
             if lp.error:
@@ -650,7 +669,7 @@ class SelfHealer:
         except PassEngineError:
             queue_depth = None
 
-        return {
+        result: Dict[str, Any] = {
             "uptime_seconds": self._now() - self._started_at,
             "passes_completed": self.passes_completed,
             "passes_failed": self.passes_failed,
@@ -662,3 +681,9 @@ class SelfHealer:
                 if self.last_pass_at else None
             ),
         }
+
+        if worker_pool is not None:
+            result["active_workers"] = worker_pool.active_count()
+            result["total_workers"] = worker_pool.total_capacity()
+
+        return result

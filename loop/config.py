@@ -105,6 +105,13 @@ class WatcherConfig:
 
 
 @dataclass
+class AgentPoolConfig:
+    """Parallel worker pool configuration loaded from [agents] in loop.toml."""
+    build_workers: int = 1
+    review_workers: int = 1
+
+
+@dataclass
 class Config:
     path: str
     raw: Dict[str, Any]
@@ -114,6 +121,7 @@ class Config:
     pipeline: PipelineConfig
     events: EventsConfig
     agent: Optional[AgentConfig] = None
+    agent_pool: AgentPoolConfig = field(default_factory=AgentPoolConfig)
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
@@ -200,8 +208,16 @@ def load_config(path: str | None = None) -> Config:
         poll_interval=str(watcher_raw.get("poll_interval", "15s")),
     )
 
+    # --- [agents] section (parallel worker pool)
+    agents_raw = raw.get("agents", {}) or {}
+    agents = AgentPoolConfig(
+        build_workers=int(agents_raw.get("build_workers", 1)),
+        review_workers=int(agents_raw.get("review_workers", 1)),
+    )
+
     target_raw = raw.get("target", {}) or {}
     target_repo_path = os.path.abspath(target_raw.get("path", root))
 
     return Config(path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
-                  plugins=plugins, pipeline=pipeline, events=events, agent=agent, watcher=watcher)
+                  plugins=plugins, pipeline=pipeline, events=events, agent=agent,
+                  agent_pool=agents, watcher=watcher)

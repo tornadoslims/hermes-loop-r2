@@ -129,9 +129,15 @@ def branch_for_issue(issue_id: str, title: str) -> str:
 
 # ------------------------------------------------------------ worktrees
 
-def worktree_path(config: Config, role: str) -> str:
-    """`<instance>/worktrees/<role>`, where "instance" is the directory
-    containing loop.toml (`config.root`) -- AC-5."""
+def worktree_path(config: Config, role: str, worker_index: Optional[int] = None) -> str:
+    """``<instance>/worktrees/<role>``, where "instance" is the directory
+    containing loop.toml (`config.root`) -- AC-5.
+
+    When `worker_index` is given (0-based), returns
+    ``<instance>/worktrees/<role>-<index>`` for parallel worker pools.
+    """
+    if worker_index is not None:
+        return os.path.join(config.root, "worktrees", f"{role}-{worker_index}")
     return os.path.join(config.root, "worktrees", role)
 
 
@@ -145,17 +151,17 @@ def default_branch(config: Config) -> str:
     return "main"
 
 
-def create_worktree(config: Config, role: str) -> str:
+def create_worktree(config: Config, role: str, worker_index: Optional[int] = None) -> str:
     """Create (or reuse) a detached git worktree at
-    `<instance>/worktrees/<role>`, checked out at the latest default
-    branch (AC-5).
+    ``<instance>/worktrees/<role>`` (or ``<role>-<index>`` for parallel
+    workers), checked out at the latest default branch (AC-5).
 
-    Worktrees are never pre-created by anything but `git worktree add`
-    (AC-5): a directory at that path lacking a `.git` FILE (worktrees
-    have a `.git` file pointing at the main repo, not a `.git` dir) is
+    Worktrees are never pre-created by anything but ``git worktree add``
+    (AC-5): a directory at that path lacking a ``.git`` FILE (worktrees
+    have a ``.git`` file pointing at the main repo, not a ``.git`` dir) is
     treated as a broken/hollow shell and removed before recreating.
     """
-    wt = worktree_path(config, role)
+    wt = worktree_path(config, role, worker_index)
     branch = default_branch(config)
 
     if os.path.isfile(os.path.join(wt, ".git")):
@@ -179,10 +185,10 @@ def create_worktree(config: Config, role: str) -> str:
     return wt
 
 
-def cleanup_worktree(config: Config, role: str) -> None:
-    """Remove the worktree for `role`, if one exists. Safe/no-op when it
-    doesn't (used by the recover script -- AC-5)."""
-    wt = worktree_path(config, role)
+def cleanup_worktree(config: Config, role: str, worker_index: Optional[int] = None) -> None:
+    """Remove the worktree for `role` (and optional `worker_index`), if one
+    exists. Safe/no-op when it doesn't (used by the recover script -- AC-5)."""
+    wt = worktree_path(config, role, worker_index)
     _run(["git", "worktree", "remove", "--force", wt], cwd=config.root, timeout=60)
     if os.path.isdir(wt):
         shutil.rmtree(wt, ignore_errors=True)
@@ -225,7 +231,8 @@ def delete_state(worktree: str) -> None:
 
 # ------------------------------------------------------------ build role
 
-def start_build(config: Config, manager: PluginManager) -> PassEngineEvent:
+def start_build(config: Config, manager: PluginManager,
+                worker_index: Optional[int] = None) -> PassEngineEvent:
     """Claim the next `agent-ready` issue and set up its build worktree
     (AC-1). Returns an "idle" event when `list_ready()` is empty (AC-7).
     """
@@ -240,7 +247,7 @@ def start_build(config: Config, manager: PluginManager) -> PassEngineEvent:
     full = linear.get_issue(issue_id) or issue
     title = full.get("title") or issue.get("title", "")
 
-    wt = create_worktree(config, "build")
+    wt = create_worktree(config, "build", worker_index)
     branch = branch_for_issue(issue_id, title)
     code, _, err = _run(["git", "checkout", "-B", branch], cwd=wt, timeout=60)
     if code != 0:
@@ -262,7 +269,8 @@ def start_build(config: Config, manager: PluginManager) -> PassEngineEvent:
 
 # ----------------------------------------------------------- review role
 
-def start_review(config: Config, manager: PluginManager) -> PassEngineEvent:
+def start_review(config: Config, manager: PluginManager,
+                 worker_index: Optional[int] = None) -> PassEngineEvent:
     """Pick the oldest issue awaiting review and check out its branch
     (AC-3). Returns an "idle" event when nothing is in review (AC-7).
     """
@@ -277,7 +285,7 @@ def start_review(config: Config, manager: PluginManager) -> PassEngineEvent:
     title = full.get("title") or candidate.get("title", "")
     branch = branch_for_issue(issue_id, title)
 
-    wt = create_worktree(config, "review")
+    wt = create_worktree(config, "review", worker_index)
     code, _, err = _run(["git", "fetch", "origin", branch], cwd=wt, timeout=120)
     if code != 0:
         raise PassEngineError(f"git fetch origin {branch} failed (issue {issue_id}): {err}")

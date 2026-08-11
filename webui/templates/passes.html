@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Passes — hermes-loop-r2</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .btn-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: rgba(255,255,255,0.06); }
+    .btn--primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn--primary:hover { background: #4090e0; }
+    .btn--danger  { background: rgba(248,81,73,0.15); border-color: var(--accent-red); color: var(--accent-red); }
+    .btn--danger:hover  { background: rgba(248,81,73,0.25); }
+    .btn--warning { background: rgba(210,153,34,0.15); border-color: var(--accent-yellow); color: var(--accent-yellow); }
+    .btn--warning:hover { background: rgba(210,153,34,0.25); }
+    .btn--green   { background: rgba(63,185,80,0.15); border-color: var(--accent-green); color: var(--accent-green); }
+    .btn--green:hover   { background: rgba(63,185,80,0.25); }
+  </style>
+</head>
+<body>
+
+  <nav id="topnav">
+    <a class="nav-brand" href="dashboard.html">
+      <span class="dot"></span> hermes-loop-r2
+    </a>
+    <ul class="nav-links">
+      <li><a href="dashboard.html">Dashboard</a></li>
+      <li><a href="issues.html">Issues</a></li>
+      <li><a href="passes.html">Passes</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+    </ul>
+    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
+  </nav>
+
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <a class="sidebar-link" href="dashboard.html">
+          <span class="icon">&#9673;</span> Dashboard
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Work</div>
+        <a class="sidebar-link" href="issues.html">
+          <span class="icon">&#9634;</span> Issues
+          <span class="sidebar-badge">6</span>
+        </a>
+        <a class="sidebar-link active" href="passes.html">
+          <span class="icon">&#9654;</span> Passes
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <a class="sidebar-link" href="plugins.html">
+          <span class="icon">&#9881;</span> Plugins
+        </a>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Passes</h1>
+        <p>Build, review, and automerge pass controls and history.</p>
+      </div>
+
+      <!-- Scheduler controls -->
+      <div class="card" style="margin-bottom:1.5rem;">
+        <div class="card-header"><h2>Scheduler</h2></div>
+        <div class="btn-row">
+          <button class="btn btn--warning" id="btn-pause">&#9646;&#9646; Pause Scheduler</button>
+          <button class="btn btn--green" id="btn-resume" disabled>&#9654; Resume Scheduler</button>
+          <span style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;color:var(--text-muted);margin-left:0.5rem;">
+            State: <span id="scheduler-state"><span class="indicator indicator--alive" style="margin:0;"></span> Running</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Force Tick controls -->
+      <div class="card" style="margin-bottom:1.5rem;">
+        <div class="card-header"><h2>Force Tick</h2></div>
+        <div class="btn-row">
+          <button class="btn btn--primary" id="btn-force-build">&#9881; Force Build Tick</button>
+          <button class="btn btn--primary" id="btn-force-review">&#128269; Force Review Tick</button>
+        </div>
+      </div>
+
+      <!-- Pass history -->
+      <div class="card">
+        <div class="card-header"><h2>Pass History</h2></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Role</th><th>Issue</th><th>Outcome</th><th>Duration</th><th>Time</th></tr></thead>
+          <tbody>
+            <tr><td><code>#117</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-97</code></td><td><span class="badge badge--green">shipped</span></td><td>2 min</td><td>14:52 UTC</td></tr>
+            <tr><td><code>#116</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-96</code></td><td><span class="badge badge--green">approved</span></td><td>1 min</td><td>14:51 UTC</td></tr>
+            <tr><td><code>#115</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-95</code></td><td><span class="badge badge--green">shipped</span></td><td>3 min</td><td>14:46 UTC</td></tr>
+            <tr><td><code>#114</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-94</code></td><td><span class="badge badge--red">changes-requested</span></td><td>0 min</td><td>14:40 UTC</td></tr>
+            <tr><td><code>#113</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-93</code></td><td><span class="badge badge--green">shipped</span></td><td>5 min</td><td>14:35 UTC</td></tr>
+            <tr><td><code>#112</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-92</code></td><td><span class="badge badge--yellow">idle</span></td><td>—</td><td>14:30 UTC</td></tr>
+            <tr><td><code>#111</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-91</code></td><td><span class="badge badge--green">approved</span></td><td>1 min</td><td>14:25 UTC</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    // Scheduler pause/resume
+    var stateEl = document.getElementById('scheduler-state');
+    var pauseBtn = document.getElementById('btn-pause');
+    var resumeBtn = document.getElementById('btn-resume');
+    var aliveHTML = '\x3Cspan class="indicator indicator--alive" style="margin:0;"\x3E\x3C/span\x3E Running';
+    var idleHTML  = '\x3Cspan class="indicator indicator--idle" style="margin:0;"\x3E\x3C/span\x3E Paused';
+    pauseBtn.onclick = function () {
+      stateEl.innerHTML = idleHTML;
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = false;
+    };
+    resumeBtn.onclick = function () {
+      stateEl.innerHTML = aliveHTML;
+      resumeBtn.disabled = true;
+      pauseBtn.disabled = false;
+    };
+    // Force tick placeholders
+    document.getElementById('btn-force-build').onclick = function () {
+      alert('Force Tick: Build triggered for next pending issue.');
+    };
+    document.getElementById('btn-force-review').onclick = function () {
+      alert('Force Tick: Review triggered for next pending PR.');
+    };
+  </script>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
