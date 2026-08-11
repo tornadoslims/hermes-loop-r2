@@ -149,6 +149,7 @@ class LinearPlugin(Plugin):
         self._api_key = self._config.get("api_key") or os.environ.get("LINEAR_API_KEY")
         self._team_key = self._config.get("team_key") or os.environ.get("LINEAR_TEAM_KEY")
         self._project_name = self._config.get("project")
+        self._project_id: Optional[str] = None
         if not self._api_key:
             raise LinearError(
                 "LINEAR_API_KEY not set (env, .env, or plugins.config.linear.api_key)"
@@ -157,7 +158,7 @@ class LinearPlugin(Plugin):
     def start(self) -> None:
         # Ensure the configured project exists before any ticks fire.
         if self._project_name:
-            self._ensure_project(self._project_name)
+            self._project_id = self._ensure_project(self._project_name)
         self._started = True
 
     def stop(self) -> None:
@@ -278,6 +279,14 @@ class LinearPlugin(Plugin):
 
     # -- public API (AC-4 operations) ---------------------------------------
 
+    def _project_filter(self, variables: Dict[str, Any]) -> str:
+        """Return a GraphQL project filter fragment and update variables
+        when a project is configured. Server-side filter — one API call."""
+        if self._project_id:
+            variables["projectId"] = self._project_id
+            return "\n                project: { id: { eq: $projectId } }\n                "
+        return ""
+
     def whoami(self) -> dict:
         data = _gql(self._require_api_key(), "query { viewer { id name email } }")
         return data["viewer"]
@@ -300,22 +309,24 @@ class LinearPlugin(Plugin):
         """
         log = log or (lambda msg: None)
         team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
         data = _gql(
             self._require_api_key(),
-            """
-            query($teamId: ID!) {
-              issues(filter: {
-                team: { id: { eq: $teamId } }
-                assignee: { null: true }
-              }, first: 100) {
-                nodes {
-                  id identifier title url state { name type } priority createdAt
-                  description labels { nodes { name } }
-                }
-              }
-            }
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}
+                assignee: {{ null: true }}{proj_filter}
+              }}, first: 100) {{
+                nodes {{
+                  id identifier title url state {{ name type }} priority createdAt
+                  description labels {{ nodes {{ name }} }}
+                }}
+              }}
+            }}
             """,
-            {"teamId": team["id"]},
+            variables,
         )
         ready_label = ready_label.lower()
         exclude_blocked_label = exclude_blocked_label.lower()
@@ -405,21 +416,23 @@ class LinearPlugin(Plugin):
         daemon's auto-unblock scan (run once a dependency issue reaches
         Done)."""
         team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
         data = _gql(
             self._require_api_key(),
-            """
-            query($teamId: ID!) {
-              issues(filter: {
-                team: { id: { eq: $teamId } }
-              }, first: 100) {
-                nodes {
-                  id identifier title url state { name type } description
-                  labels { nodes { name } }
-                }
-              }
-            }
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}{proj_filter}
+              }}, first: 100) {{
+                nodes {{
+                  id identifier title url state {{ name type }} description
+                  labels {{ nodes {{ name }} }}
+                }}
+              }}
+            }}
             """,
-            {"teamId": team["id"]},
+            variables,
         )
         blocked_label = blocked_label.lower()
         out = []
@@ -437,23 +450,25 @@ class LinearPlugin(Plugin):
         by a run that never got as far as writing pass state, or whose
         worktree was lost."""
         team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
         data = _gql(
             self._require_api_key(),
-            """
-            query($teamId: ID!) {
-              issues(filter: {
-                team: { id: { eq: $teamId } }
-                state: { type: { eq: "started" } }
-                assignee: { null: false }
-              }, first: 100) {
-                nodes {
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}
+                state: {{ type: {{ eq: \"started\" }} }}
+                assignee: {{ null: false }}{proj_filter}
+              }}, first: 100) {{
+                nodes {{
                   id identifier title url updatedAt
-                  labels { nodes { name } }
-                }
-              }
-            }
+                  labels {{ nodes {{ name }} }}
+                }}
+              }}
+            }}
             """,
-            {"teamId": team["id"]},
+            variables,
         )
         return data["issues"]["nodes"]
 
@@ -482,18 +497,20 @@ class LinearPlugin(Plugin):
         `review_label` when it submits a branch (see `pass_engine`).
         """
         team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
         data = _gql(
             self._require_api_key(),
-            """
-            query($teamId: ID!) {
-              issues(filter: {
-                team: { id: { eq: $teamId } }
-              }, first: 100) {
-                nodes { id identifier title url state { name } labels { nodes { name } } }
-              }
-            }
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}{proj_filter}
+              }}, first: 100) {{
+                nodes {{ id identifier title url state {{ name }} labels {{ nodes {{ name }} }} }}
+              }}
+            }}
             """,
-            {"teamId": team["id"]},
+            variables,
         )
         review_label = review_label.lower()
         out = []
@@ -597,19 +614,21 @@ class LinearPlugin(Plugin):
         "queue has issues but none are ready/claimable" (e.g. a
         mislabeled issue missing `agent-ready`)."""
         team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
         data = _gql(
             self._require_api_key(),
-            """
-            query($teamId: ID!) {
-              issues(filter: {
-                team: { id: { eq: $teamId } }
-                state: { type: { nin: ["completed", "canceled"] } }
-              }, first: 100) {
-                nodes { id identifier title url state { name } labels { nodes { name } } }
-              }
-            }
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}
+                state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }}{proj_filter}
+              }}, first: 100) {{
+                nodes {{ id identifier title url state {{ name }} labels {{ nodes {{ name }} }} }}
+              }}
+            }}
             """,
-            {"teamId": team["id"]},
+            variables,
         )
         return data["issues"]["nodes"]
 
