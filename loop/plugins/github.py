@@ -336,6 +336,35 @@ class GitHubPlugin(Plugin):
         )
         return {"pr_number": data["number"], "url": data["html_url"]}
 
+    def find_pr(self, head_branch: str, state: str = "all") -> Optional[dict]:
+        """REA-120: look up a PR by its head branch, so callers can tell
+        "branch pushed but no PR exists yet" apart from "PR already
+        exists" without listing every PR. `state` follows GitHub's own
+        values (\"open\", \"closed\", \"all\"); defaults to \"all\" so a
+        closed/merged PR still counts as "a PR exists for this branch"
+        for reconciliation purposes -- callers that specifically need an
+        *open* PR should pass state=\"open\".
+        """
+        owner = self._repo.split("/", 1)[0] if self._repo else None
+        prs = self._call(
+            "GET",
+            f"/repos/{self._repo}/pulls",
+            params={
+                "state": state,
+                "head": f"{owner}:{head_branch}" if owner else head_branch,
+                "per_page": 1,
+            },
+        )
+        if not prs:
+            return None
+        pr = prs[0]
+        return {
+            "pr_number": pr["number"],
+            "url": pr["html_url"],
+            "state": pr["state"],
+            "head_branch": pr["head"]["ref"],
+        }
+
     def merge_pr(self, pr_number: str) -> bool:
         try:
             result = self._call(

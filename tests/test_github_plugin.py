@@ -194,3 +194,47 @@ def test_merge_pr_returns_true_on_success(mock_request, monkeypatch):
     plugin._username = "bot"
     mock_request.return_value = ({"merged": True}, {})
     assert plugin.merge_pr("42") is True
+
+
+@patch("loop.plugins.github._request")
+def test_find_pr_returns_none_when_no_matching_pr(mock_request, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    plugin = GitHubPlugin()
+    plugin.init({"repo": "owner/repo"})
+    plugin._authenticated = True
+    plugin._username = "bot"
+    mock_request.return_value = ([], {})
+    assert plugin.find_pr("some-branch") is None
+    args, kwargs = mock_request.call_args
+    assert args[1] == "GET"
+    assert args[2] == "/repos/owner/repo/pulls"
+    assert kwargs["params"]["head"] == "owner:some-branch"
+
+
+@patch("loop.plugins.github._request")
+def test_find_pr_returns_matching_pr(mock_request, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    plugin = GitHubPlugin()
+    plugin.init({"repo": "owner/repo"})
+    plugin._authenticated = True
+    plugin._username = "bot"
+    mock_request.return_value = (
+        [{"number": 7, "html_url": "https://x/7", "state": "open",
+          "head": {"ref": "some-branch"}}],
+        {},
+    )
+    pr = plugin.find_pr("some-branch")
+    assert pr == {"pr_number": 7, "url": "https://x/7", "state": "open", "head_branch": "some-branch"}
+
+
+@patch("loop.plugins.github._request")
+def test_find_pr_defaults_to_all_states(mock_request, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    plugin = GitHubPlugin()
+    plugin.init({"repo": "owner/repo"})
+    plugin._authenticated = True
+    plugin._username = "bot"
+    mock_request.return_value = ([], {})
+    plugin.find_pr("some-branch")
+    args, kwargs = mock_request.call_args
+    assert kwargs["params"]["state"] == "all"

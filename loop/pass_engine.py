@@ -97,6 +97,27 @@ def _linear_plugin(manager: PluginManager):
     )
 
 
+def _github_plugin(manager: PluginManager):
+    """Look up the loaded plugin named "github", if any (REA-120).
+
+    Unlike `_linear_plugin`, GitHub is an *optional* plugin (loop.toml
+    may or may not enable it -- see loop.toml's commented-out example).
+    Returns None when it isn't configured at all, so callers can fall
+    back to the pre-REA-120 behavior (push + move to review, no PR
+    step) exactly as before. Only raises when the plugin *is*
+    configured but failed to start, so a broken GitHub token doesn't
+    get silently treated as "not configured".
+    """
+    for lp in getattr(manager, "plugins", []):
+        if lp.name == "github":
+            if lp.error or lp.instance is None:
+                raise PassEngineError(
+                    f"'github' plugin is loaded but failed to start: {lp.error}"
+                )
+            return lp.instance
+    return None
+
+
 def slugify(title: str, max_words: int = 5) -> str:
     words = re.sub(r"[^a-z0-9\s-]", "", (title or "").lower()).split()
     return "-".join(words[:max_words]) or "task"
@@ -299,6 +320,18 @@ def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
     """AC-2: push the branch, add a comment with the branch name, move
     the issue to review. NG-2/NG-3 out of scope here: no merging, no
     conflict handling -- a failed push/fetch is reported, not resolved.
+
+    REA-120: when a "github" plugin is loaded, "submit for review" must
+    be atomic -- push branch, THEN open (or confirm) a PR, and only
+    THEN move Linear to In Review. If PR creation fails, the issue is
+    left as-is (not moved to review) and PassEngineError is raised with
+    the branch name so the pushed commit and the un-transitioned issue
+    stay consistent with each other: the pass state file is also kept
+    (not deleted) so a re-invocation of pass_end can retry PR creation
+    without re-doing the build. When no "github" plugin is configured
+    at all, behavior is unchanged from before REA-120 (push + move to
+    review, no PR step) -- Linear-only deployments aren't required to
+    also wire up GitHub.
     """
     linear = _linear_plugin(manager)
     branch = state["branch"]
@@ -319,12 +352,56 @@ def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
     if code != 0:
         raise PassEngineError(f"push of branch {branch!r} failed: {err}")
 
+    github = _github_plugin(manager)
+    pr = None
+    if github is not None:
+        try:
+            pr = github.find_pr(branch, state="all")
+            if pr is None:
+                base = default_branch_name_for(worktree)
+                title = f"{issue_id}: {state.get('issue_title', '')}" if issue_id else branch
+                body = f"Closes #{issue_id}" if issue_id else ""
+                pr = github.create_pr(title=title, head=branch, base=base, body=body)
+        except Exception as e:  # noqa: BLE001 - any GitHub failure blocks the review transition
+            if issue_id:
+                linear.add_comment(
+                    issue_id,
+                    f"\u26a0 Branch `{branch}` pushed, but opening a GitHub PR failed: "
+                    f"{e}. Issue left out of review until a PR exists -- re-run "
+                    f"the ship step to retry.",
+                )
+            raise PassEngineError(
+                f"branch {branch!r} pushed but PR creation failed, issue NOT moved "
+                f"to review: {e}"
+            ) from e
+
     if issue_id:
-        linear.add_comment(issue_id, f"Branch pushed: `{branch}`. Ready for review.")
+        if pr is not None:
+            linear.add_comment(
+                issue_id, f"Branch pushed: `{branch}`. PR: {pr.get('url')}. Ready for review."
+            )
+        else:
+            linear.add_comment(issue_id, f"Branch pushed: `{branch}`. Ready for review.")
         linear.move_to_review(issue_id)
 
     delete_state(worktree)
-    return {"ok": True, "role": "build", "issue": issue_id, "branch": branch, "phase": "submitted"}
+    result = {"ok": True, "role": "build", "issue": issue_id, "branch": branch, "phase": "submitted"}
+    if pr is not None:
+        result["pr_url"] = pr.get("url")
+    return result
+
+
+def default_branch_name_for(worktree: str) -> str:
+    """The base branch a newly opened PR should target -- the local
+    git repo's own `origin/HEAD` symref (same source of truth
+    `default_branch()` uses for worktree creation), so PR creation
+    never depends on the GitHub plugin's separate (and slower/rate
+    limited) "GET /repos/{repo}" call to learn the default branch.
+    """
+    code, out, _ = _run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd=worktree)
+    if code == 0 and out:
+        return out.rsplit("/", 1)[-1]
+    return "main"
 
 
 _REVIEW_OUTCOMES = {"approved", "changes_requested", "needs_rebase"}

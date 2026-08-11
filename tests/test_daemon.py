@@ -16,6 +16,7 @@ from loop.events import (
     IssueUnblocked,
     PluginDegraded,
     PluginRecovered,
+    PRCreated,
     QueueEmpty,
     QueueStalled,
     RecoveryEvent,
@@ -53,9 +54,10 @@ def _write_config(clone, extra_pipeline=""):
 
 
 class FakeLinearPlugin:
-    def __init__(self, ready=None, open_issues=None):
+    def __init__(self, ready=None, open_issues=None, in_review=None):
         self._ready = ready or []
         self._open = open_issues if open_issues is not None else list(self._ready)
+        self._in_review = in_review or []
         self.calls = []
         # REA-90: configurable stand-ins for the new plugin surface.
         self._blocked = []
@@ -110,6 +112,28 @@ class FakeLinearPlugin:
         self.calls.append(("list_in_progress",))
         return self._in_progress
 
+    def list_in_review(self, **kwargs):
+        self.calls.append(("list_in_review", kwargs))
+        return self._in_review
+
+
+class FakeGitHubPlugin:
+    def __init__(self, existing_prs=None, create_result=None, create_error=None):
+        self.calls = []
+        self._existing_prs = existing_prs or {}
+        self._create_result = create_result
+        self._create_error = create_error
+
+    def find_pr(self, head_branch, state="all"):
+        self.calls.append(("find_pr", head_branch, state))
+        return self._existing_prs.get(head_branch)
+
+    def create_pr(self, title, head, base, body):
+        self.calls.append(("create_pr", title, head, base, body))
+        if self._create_error:
+            raise self._create_error
+        return self._create_result or {"pr_number": 99, "url": "https://x/99"}
+
 
 class FakeLoadedPlugin:
     def __init__(self, name, instance, error=None):
@@ -129,6 +153,15 @@ class FakeManager:
 
 def _manager_with_linear(plugin):
     return FakeManager([FakeLoadedPlugin("linear", plugin)])
+
+
+def _manager_with(linear=None, github=None):
+    plugins = []
+    if linear is not None:
+        plugins.append(FakeLoadedPlugin("linear", linear))
+    if github is not None:
+        plugins.append(FakeLoadedPlugin("github", github))
+    return FakeManager(plugins)
 
 
 # ------------------------------------------------------------------ AC-1
@@ -632,3 +665,106 @@ def test_recycle_stuck_issues_ignores_fresh_in_progress(tmp_path):
     healer = SelfHealer(config, manager)
 
     assert healer.recycle_stuck_issues() == []
+
+
+# ------------------------------------------------------------------ REA-120
+
+def test_reconcile_stale_review_handoff_is_noop_without_github_plugin(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-85", "title": "Bootstrap"}])
+    manager = _manager_with(linear=linear)  # no github plugin loaded
+    healer = SelfHealer(config, manager)
+
+    assert healer.reconcile_stale_review_handoffs() == []
+    assert not any(c[0] == "list_in_review" for c in linear.calls)
+
+
+def test_reconcile_stale_review_handoff_skips_when_pr_already_exists(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    branch = "rea-85-bootstrap"
+    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-85", "title": "Bootstrap"}])
+    github = FakeGitHubPlugin(existing_prs={branch: {"pr_number": 1, "url": "https://x/1"}})
+    manager = _manager_with(linear=linear, github=github)
+    healer = SelfHealer(config, manager)
+
+    events = healer.reconcile_stale_review_handoffs()
+
+    assert events == []
+    assert ("find_pr", branch, "all") in github.calls
+    assert not any(c[0] == "create_pr" for c in github.calls)
+
+
+def test_reconcile_stale_review_handoff_skips_when_branch_never_pushed(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-85", "title": "Bootstrap"}])
+    github = FakeGitHubPlugin()  # find_pr -> None for every branch
+    manager = _manager_with(linear=linear, github=github)
+    healer = SelfHealer(config, manager)
+
+    # No branch named rea-85-bootstrap was ever pushed to origin in this repo.
+    events = healer.reconcile_stale_review_handoffs()
+
+    assert events == []
+    assert not any(c[0] == "create_pr" for c in github.calls)
+
+
+def test_reconcile_stale_review_handoff_opens_missing_pr(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    branch = "rea-85-bootstrap"
+    # Simulate build having pushed the branch already, exactly as REA-120's
+    # problem statement describes (commit exists, Linear says in-review,
+    # zero PR).
+    _git(["checkout", "-B", branch], clone)
+    (clone / "change.txt").write_text("x")
+    _git(["add", "-A"], clone)
+    _git(["-c", "user.email=a@b.com", "-c", "user.name=A", "commit", "-m", "work"], clone)
+    _git(["push", "origin", branch], clone)
+    _git(["checkout", "main"], clone)
+
+    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-85", "title": "Bootstrap"}])
+    github = FakeGitHubPlugin(create_result={"pr_number": 1, "url": "https://x/1"})
+    manager = _manager_with(linear=linear, github=github)
+    healer = SelfHealer(config, manager)
+
+    events = healer.reconcile_stale_review_handoffs()
+
+    assert len(events) == 1
+    assert isinstance(events[0], PRCreated)
+    assert events[0].issue_id == "REA-85"
+    assert events[0].url == "https://x/1"
+    create_calls = [c for c in github.calls if c[0] == "create_pr"]
+    assert len(create_calls) == 1
+    _, title, head, base, body = create_calls[0]
+    assert head == branch
+    assert base == "main"
+    assert any(c[0] == "add_comment" and c[1] == "REA-85" for c in linear.calls)
+    assert manager.emitted and isinstance(manager.emitted[0], PRCreated)
+
+
+def test_reconcile_stale_review_handoff_comments_when_pr_create_fails(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    branch = "rea-85-bootstrap"
+    _git(["checkout", "-B", branch], clone)
+    (clone / "change.txt").write_text("x")
+    _git(["add", "-A"], clone)
+    _git(["-c", "user.email=a@b.com", "-c", "user.name=A", "commit", "-m", "work"], clone)
+    _git(["push", "origin", branch], clone)
+    _git(["checkout", "main"], clone)
+
+    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-85", "title": "Bootstrap"}])
+    github = FakeGitHubPlugin(create_error=RuntimeError("HTTP 403: rate limited"))
+    manager = _manager_with(linear=linear, github=github)
+    healer = SelfHealer(config, manager)
+
+    events = healer.reconcile_stale_review_handoffs()
+
+    assert events == []
+    assert any(
+        c[0] == "add_comment" and c[1] == "REA-85" and "rate limited" in c[2]
+        for c in linear.calls
+    )
