@@ -26,7 +26,16 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from loop.config import Config
-from loop.events import PluginDegraded, PluginRecovered, QueueEmpty, RecoveryEvent, StallEvent
+from loop.events import (
+    IssueRecycled,
+    IssueUnblocked,
+    PluginDegraded,
+    PluginRecovered,
+    QueueEmpty,
+    QueueStalled,
+    RecoveryEvent,
+    StallEvent,
+)
 from loop.pass_engine import (
     STATE_FILENAME,
     PassEngineError,
@@ -62,6 +71,17 @@ class SelfHealer:
         # issue is found).
         self._consecutive_empty_ticks = 0
         self._consecutive_stale_ready_ticks = 0
+
+        # REA-90 AC-4: consecutive ticks where the queue has exactly 1
+        # ready-but-blocked issue (queue "stalled" -- a build pass
+        # claimed the wrong issue and left the queue effectively empty).
+        self._consecutive_solo_blocked_ticks = 0
+
+        # REA-90 AC-5: per-issue count of how many times the stuck-issue
+        # recycler has re-queued the same Linear issue. Reset once an
+        # issue leaves the in-progress set (claimed successfully or
+        # completed) via `_recycle_stuck_issues`' own bookkeeping.
+        self._issue_recycle_counts: Dict[str, int] = {}
 
         # AC-4 per-plugin restart-failure streaks and give-up set.
         self._plugin_restart_failures: Dict[str, int] = {}
@@ -203,6 +223,153 @@ class SelfHealer:
             self.manager.emit(event)
             return event
         return None
+
+    # ------------------------------------------------------------ AC-2 (REA-90)
+
+    def auto_unblock(self) -> List[IssueUnblocked]:
+        """REA-90 AC-2: scan every `blocked` issue and drop the `blocked`
+        label (adding `agent-ready`) for any whose declared dependencies
+        (`LinearPlugin.parse_dependencies`/`_unmet_dependencies`) are now
+        all in a completed/cancelled state. Call this on every build
+        tick -- cheap (bounded by team issue count) and idempotent: an
+        issue with no remaining unmet dependency is only unblocked once,
+        since the next scan won't find it labeled `blocked` any more.
+        No human intervention needed; the issue becomes claimable the
+        moment `list_ready()` next runs."""
+        try:
+            linear = _linear_plugin(self.manager)
+            blocked = linear.list_blocked()
+        except PassEngineError:
+            return []
+
+        unblocked: List[IssueUnblocked] = []
+        for issue in blocked:
+            issue_id = issue.get("identifier")
+            if not issue_id:
+                continue
+            try:
+                comments = linear.get_comments(issue_id) if hasattr(linear, "get_comments") else []
+            except Exception:  # noqa: BLE001 - never let one bad issue break the scan
+                comments = []
+            try:
+                deps = linear.parse_dependencies(issue.get("description", ""), comments)
+            except Exception:  # noqa: BLE001
+                continue
+            if not deps:
+                continue  # `blocked` label with no parsed dependency -- not ours to touch
+            if hasattr(linear, "dependencies_met"):
+                try:
+                    met = linear.dependencies_met(issue_id)
+                except Exception:  # noqa: BLE001
+                    met = False
+            else:
+                met = False
+            if not met:
+                continue
+
+            linear.remove_label(issue_id, "blocked")
+            linear.add_label(issue_id, "agent-ready")
+            event = IssueUnblocked(issue_id=issue_id, previously_blocked_by=deps,
+                                    timestamp=datetime.now())
+            self.manager.emit(event)
+            unblocked.append(event)
+        return unblocked
+
+    # ---------------------------------------------------------- AC-4 (REA-90)
+
+    def check_queue_drain(self, ready_count: int, blocked_ready_count: int) -> Optional[QueueStalled]:
+        """REA-90 AC-4: catches the case a build pass claimed the wrong
+        issue and left exactly one ready issue behind, but that one
+        issue is itself blocked on dependencies -- i.e. the queue is
+        externally "1 issue" but internally drained to zero claimable
+        work. `blocked_ready_count` is the count of `agent-ready`
+        issues that are blocked (present in `list_blocked()` /
+        excluded from `list_ready()` by AC-1). Logs
+        `[queue] stalled -- 1 issue but all blocked` and, after 3+
+        consecutive ticks in that state, emits `QueueStalled`."""
+        if ready_count != 0 or blocked_ready_count != 1:
+            self._consecutive_solo_blocked_ticks = 0
+            return None
+
+        print("[queue] stalled -- 1 issue but all blocked", flush=True)
+        self._consecutive_solo_blocked_ticks += 1
+        if self._consecutive_solo_blocked_ticks < 3:
+            return None
+
+        event = QueueStalled(timestamp=datetime.now())
+        self.manager.emit(event)
+        return event
+
+    # ---------------------------------------------------------- AC-5 (REA-90)
+
+    def recycle_stuck_issues(self) -> List[IssueRecycled]:
+        """REA-90 AC-5: an issue that's been `In Progress` (Linear-side,
+        via `list_in_progress()`) for longer than `pipeline.pass_timeout`
+        with no corresponding local pass state (i.e. `check_stuck_passes`
+        has nothing to recover -- the claiming pass never got as far as
+        writing `.loop.pass.json`, or its worktree/state was already
+        cleaned up) is unclaimed and re-added to `agent-ready`.
+
+        Recycled 3 times -> marked `blocked` with an explanatory comment
+        and left alone (the daemon moves on rather than jamming the
+        pipeline on one bad issue forever)."""
+        try:
+            linear = _linear_plugin(self.manager)
+        except PassEngineError:
+            return []
+        if not hasattr(linear, "list_in_progress"):
+            return []
+
+        timeout_s = parse_duration(self.config.pipeline.pass_timeout)
+        now = datetime.now()
+        recycled: List[IssueRecycled] = []
+
+        try:
+            in_progress = linear.list_in_progress()
+        except Exception:  # noqa: BLE001 - one bad query must not crash the tick
+            return []
+
+        for issue in in_progress:
+            issue_id = issue.get("identifier")
+            updated_at = issue.get("updatedAt")
+            if not issue_id or not updated_at:
+                continue
+            try:
+                updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                age_s = (now.astimezone(updated_dt.tzinfo) - updated_dt).total_seconds()
+            except (ValueError, TypeError):
+                continue
+            if age_s < timeout_s:
+                continue
+
+            attempt = self._issue_recycle_counts.get(issue_id, 0) + 1
+            self._issue_recycle_counts[issue_id] = attempt
+
+            if attempt >= 3:
+                linear.unassign_issue(issue_id)
+                linear.add_label(issue_id, "blocked")
+                linear.add_comment(
+                    issue_id,
+                    f"\u26a0 Auto-recycled {attempt} times (In Progress > "
+                    f"{timeout_s:.0f}s with no branch pushed each time). "
+                    f"Marking blocked -- needs a human look before the "
+                    f"daemon retries it again.",
+                )
+            else:
+                linear.unassign_issue(issue_id)
+                linear.add_label(issue_id, "agent-ready")
+                linear.add_comment(
+                    issue_id,
+                    f"\u26a0 In Progress for over {timeout_s:.0f}s with no branch "
+                    f"pushed (attempt {attempt}/3). Auto-recovered by the "
+                    f"self-healing daemon: unclaimed and returned to the "
+                    f"ready queue.",
+                )
+
+            event = IssueRecycled(issue_id=issue_id, attempt=attempt, timestamp=now)
+            self.manager.emit(event)
+            recycled.append(event)
+        return recycled
 
     # ------------------------------------------------------------ AC-4
 
