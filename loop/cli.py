@@ -51,11 +51,30 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
     updates the empty-queue / stale-ready counters (AC-3/AC-6). AC-7:
     every state transition still produces an event -- emit()
     PassStarted before the (currently no-op) pass work and
-    PassCompleted/PassFailed after."""
+    PassCompleted/PassFailed after.
+
+    REA-155: the build tick now calls the configured AgentRunner to
+    do the actual cognitive work (AC-6). Hermes/Claude Code/Codex are
+    subprocess invocations driven by the daemon itself — no external
+    cron needed.
+    """
+
+    # REA-155: resolve the agent runner once (cheap — loads at tick time
+    # from the current config; allows config changes on restart).
+    runner = None
+
+    def _get_runner():
+        nonlocal runner
+        if runner is not None:
+            return runner
+        from loop.agent_runner import create_agent_runner
+        runner = create_agent_runner(healer.config)
+        return runner
 
     def tick_fn(role: str) -> None:
         manager.emit(PassStarted(role=role, issue_id="", timestamp=datetime.now()))
         start = time.monotonic()
+        issue_id = ""
         try:
             healer.check_stuck_passes()
             healer.check_plugin_health()
@@ -104,17 +123,240 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
                 except PassEngineError:
                     pass
                 healer.check_stall(scheduler_ref.get("scheduler"))
-            # real pass engine wiring (claim/build/review) is a later issue
+
+                # REA-155: invoke the agent runner for the build pass.
+                _run_agent_build_pass(healer, manager, _get_runner)
+
+            elif role == "review":
+                # REA-155: invoke the agent runner for the review pass.
+                _run_agent_review_pass(healer, manager, _get_runner)
+
         except Exception as e:  # noqa: BLE001 - surfaced as PassFailed, not raised
             healer.record_pass_failed()
-            manager.emit(PassFailed(role=role, issue_id="", error=str(e), timestamp=datetime.now()))
+            manager.emit(PassFailed(role=role, issue_id=issue_id, error=str(e), timestamp=datetime.now()))
             raise
         else:
             duration = time.monotonic() - start
             healer.record_pass_completed()
-            manager.emit(PassCompleted(role=role, issue_id="", outcome="noop", duration_s=duration, timestamp=datetime.now()))
+            manager.emit(PassCompleted(role=role, issue_id=issue_id, outcome="noop", duration_s=duration, timestamp=datetime.now()))
 
     return tick_fn
+
+
+def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner) -> None:
+    """REA-155: claim an issue, invoke the agent runner, and ship (AC-6).
+
+    On idle (no ready issues), this is a no-op — the tick function
+    still emits PassCompleted. On agent timeout/crash, the issue is
+    aborted and recycled (AC-7).
+    """
+    from loop.pass_engine import (
+        PassEngineError,
+        start_build,
+        pass_end,
+        worktree_path as _wtp,
+        read_state as _rs,
+    )
+    from loop.agent_runner import (
+        AgentCrashed,
+        AgentTimeoutError,
+        Issue as AgentIssue,
+    )
+
+    try:
+        event = start_build(healer.config, manager)
+    except PassEngineError as e:
+        print(f"[pass_engine] start_build failed: {e}", flush=True)
+        return
+
+    if event.action == "idle":
+        return  # nothing claimed — no-op, let the tick function emit PassCompleted
+
+    issue_id = event.issue or ""
+    worktree = _wtp(healer.config, "build")
+
+    # Read the state file that start_build() wrote.
+    try:
+        st = _rs(worktree)
+        state_issue_id = st.get("issue_id", issue_id)
+        state_title = st.get("issue_title", "")
+        state_desc = st.get("description", "")
+    except Exception:
+        state_issue_id = issue_id
+        state_title = ""
+        state_desc = ""
+
+    acs, ngs = _parse_ac_ng(state_desc)
+    agent_issue = AgentIssue(
+        id=state_issue_id,
+        title=state_title,
+        description=state_desc,
+        acceptance_criteria=acs,
+        non_goals=ngs,
+    )
+
+    def on_event(stage: str, detail: str) -> None:
+        print(f"[agent:{state_issue_id}] {stage}: {detail}", flush=True)
+
+    runner = get_runner()
+    timeout_s = _agent_timeout_s(healer.config)
+
+    try:
+        result = runner.run_build(worktree, agent_issue, on_event, timeout_s)
+    except (AgentTimeoutError, AgentCrashed) as e:
+        print(f"[agent:{state_issue_id}] {e}", flush=True)
+        # AC-7: abort — unassign the issue and recycle to the queue.
+        _abort_build_pass(healer, manager, worktree, state_issue_id, str(e))
+        return
+
+    # AC-7: only ship if the agent reports verify_passed.
+    if not result.verify_passed:
+        print(f"[agent:{state_issue_id}] verify failed, aborting", flush=True)
+        _abort_build_pass(healer, manager, worktree, state_issue_id,
+                          "agent reported verify_failed")
+        return
+
+    # Ship through pass_end, which handles rebase/squash/push/Linear state.
+    try:
+        pass_end("build", manager=manager, config=healer.config,
+                 worktree=worktree)
+    except PassEngineError as e:
+        print(f"[pass_engine] ship failed: {e}", flush=True)
+        return
+
+
+def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runner) -> None:
+    """REA-155: pick an issue in review, invoke the agent runner, and
+    apply the verdict (AC-6).
+
+    On idle (nothing in review), this is a no-op.
+    """
+    from loop.pass_engine import (
+        PassEngineError,
+        start_review,
+        pass_end,
+    )
+    from loop.agent_runner import (
+        AgentCrashed,
+        AgentTimeoutError,
+        Issue as AgentIssue,
+    )
+
+    try:
+        event = start_review(healer.config, manager)
+    except PassEngineError as e:
+        print(f"[pass_engine] start_review failed: {e}", flush=True)
+        return
+
+    if event.action == "idle":
+        return
+
+    from loop.pass_engine import worktree_path as _wtp
+    worktree = _wtp(healer.config, "review")
+
+    try:
+        from loop.pass_engine import read_state as _rs
+        st = _rs(worktree)
+        issue_id = st.get("issue_id", event.issue or "")
+        issue_title = st.get("issue_title", "")
+        issue_desc = st.get("description", "")
+        branch = st.get("branch", event.branch or "")
+    except Exception:
+        issue_id = event.issue or ""
+        issue_title = ""
+        issue_desc = ""
+        branch = event.branch or ""
+
+    acs, ngs = _parse_ac_ng(issue_desc)
+    agent_issue = AgentIssue(
+        id=issue_id,
+        title=issue_title,
+        description=issue_desc,
+        acceptance_criteria=acs,
+        non_goals=ngs,
+    )
+
+    def on_event(stage: str, detail: str) -> None:
+        print(f"[agent:{issue_id}] {stage}: {detail}", flush=True)
+
+    runner = get_runner()
+    timeout_s = _agent_timeout_s(healer.config)
+
+    try:
+        result = runner.run_review(worktree, agent_issue, branch, on_event, timeout_s)
+    except (AgentTimeoutError, AgentCrashed) as e:
+        print(f"[agent:{issue_id}] {e}", flush=True)
+        try:
+            pass_end("review", manager=manager, config=healer.config,
+                     worktree=worktree, outcome="changes_requested",
+                     comment=f"Agent {e}. Escalating for human review.")
+        except Exception:
+            pass
+        return
+
+    try:
+        pass_end("review", manager=manager, config=healer.config,
+                 worktree=worktree, outcome=result.verdict,
+                 comment="\n".join(result.must_fix_findings) if result.must_fix_findings else None)
+    except PassEngineError as e:
+        print(f"[pass_engine] review pass_end failed: {e}", flush=True)
+
+
+def _abort_build_pass(healer: SelfHealer, manager: PluginManager,
+                      worktree: str, issue_id: str, reason: str) -> None:
+    """AC-7: unassign the issue, reset the worktree, and recycle the
+    issue back to the ready queue. Does NOT call pass_end — this is a
+    clean abort that leaves no stale state behind.
+    """
+    from loop.pass_engine import _linear_plugin, _run, delete_state, PassEngineError
+    try:
+        # Reset the worktree to a clean state.
+        _run(["git", "checkout", "."], cwd=worktree, timeout=60)
+        _run(["git", "clean", "-fd"], cwd=worktree, timeout=60)
+        delete_state(worktree)
+    except Exception:
+        pass
+
+    try:
+        linear = _linear_plugin(manager)
+        linear.unassign_issue(issue_id)
+        linear.add_label(issue_id, "agent-ready")
+        linear.add_comment(
+            issue_id,
+            f"\u26a0 Build pass aborted: {reason}. Issue returned "
+            f"to the ready queue by the daemon.",
+        )
+    except PassEngineError:
+        pass
+    except Exception:
+        pass
+
+
+def _parse_ac_ng(description: str):
+    """Extract acceptance criteria (AC-N) and non-goals (NG-N) from the
+    issue description."""
+    acs = []
+    ngs = []
+    if not description:
+        return acs, ngs
+    import re
+    for line in description.splitlines():
+        stripped = line.strip()
+        match_ac = re.search(r'AC-\d+', stripped)
+        match_ng = re.search(r'NG-\d+', stripped)
+        if match_ac and not match_ng:
+            acs.append(stripped)
+        elif match_ng:
+            ngs.append(stripped)
+    return acs, ngs
+
+
+def _agent_timeout_s(config: Config) -> float:
+    """Parse agent.timeout into seconds (AC-7)."""
+    from loop.scheduler import parse_duration
+    if config.agent is not None and config.agent.timeout:
+        return parse_duration(config.agent.timeout)
+    return 3600.0  # default 1h
 
 
 def cmd_serve(args) -> int:

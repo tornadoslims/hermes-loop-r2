@@ -47,7 +47,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -76,6 +76,24 @@ class PipelineConfig:
 
 
 @dataclass
+class AgentConfig:
+    backend: str = "hermes"  # hermes | claude-code | codex
+    timeout: str = "1h"
+    hermes: Dict[str, Any] = field(default_factory=dict)
+    claude_code: Dict[str, Any] = field(default_factory=dict)
+    codex: Dict[str, Any] = field(default_factory=dict)
+
+    def backend_config(self) -> Dict[str, Any]:
+        """Return the combined agent config dict for create_agent_runner()."""
+        result: Dict[str, Any] = {"backend": self.backend}
+        result["timeout"] = self.timeout
+        result["hermes"] = dict(self.hermes)
+        result["claude-code"] = dict(self.claude_code)
+        result["codex"] = dict(self.codex)
+        return result
+
+
+@dataclass
 class EventsConfig:
     log_file: str = "events.jsonl"
 
@@ -95,7 +113,8 @@ class Config:
     plugins: PluginsConfig
     pipeline: PipelineConfig
     events: EventsConfig
-    watcher: WatcherConfig
+    agent: Optional[AgentConfig] = None
+    watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
         """Plugin-specific config block for `name`, or {} if none set."""
@@ -163,6 +182,18 @@ def load_config(path: str | None = None) -> Config:
         log_file = os.path.normpath(os.path.join(root, log_file))
     events = EventsConfig(log_file=log_file)
 
+    # --- [agent] section (REA-155)
+    agent_raw = raw.get("agent", {}) or {}
+    agent: Optional[AgentConfig] = None
+    if agent_raw:
+        agent = AgentConfig(
+            backend=agent_raw.get("backend", "hermes"),
+            timeout=agent_raw.get("timeout", "1h"),
+            hermes=dict(agent_raw.get("hermes", {}) or {}),
+            claude_code=dict(agent_raw.get("claude_code", {}) or {}),
+            codex=dict(agent_raw.get("codex", {}) or {}),
+        )
+
     watcher_raw = raw.get("watcher", {}) or {}
     watcher = WatcherConfig(
         enabled=bool(watcher_raw.get("enabled", False)),
@@ -172,7 +203,5 @@ def load_config(path: str | None = None) -> Config:
     target_raw = raw.get("target", {}) or {}
     target_repo_path = os.path.abspath(target_raw.get("path", root))
 
-    return Config(
-        path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
-        plugins=plugins, pipeline=pipeline, events=events, watcher=watcher,
-    )
+    return Config(path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
+                  plugins=plugins, pipeline=pipeline, events=events, agent=agent, watcher=watcher)
