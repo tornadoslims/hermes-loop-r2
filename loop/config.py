@@ -114,6 +114,7 @@ class Config:
     pipeline: PipelineConfig
     events: EventsConfig
     agent: Optional[AgentConfig] = None
+    watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
         """Plugin-specific config block for `name`, or {} if none set."""
@@ -193,5 +194,14 @@ def load_config(path: str | None = None) -> Config:
             codex=dict(agent_raw.get("codex", {}) or {}),
         )
 
-    return Config(path=toml_path, raw=raw, root=root, plugins=plugins,
-                  pipeline=pipeline, events=events, agent=agent)
+    watcher_raw = raw.get("watcher", {}) or {}
+    watcher = WatcherConfig(
+        enabled=bool(watcher_raw.get("enabled", False)),
+        poll_interval=str(watcher_raw.get("poll_interval", "15s")),
+    )
+
+    target_raw = raw.get("target", {}) or {}
+    target_repo_path = os.path.abspath(target_raw.get("path", root))
+
+    return Config(path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
+                  plugins=plugins, pipeline=pipeline, events=events, agent=agent, watcher=watcher)
