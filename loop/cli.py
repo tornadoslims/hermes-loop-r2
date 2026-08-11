@@ -20,6 +20,8 @@ from loop.events import DaemonStarted, DaemonStopping, PassCompleted, PassFailed
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
 from loop.scheduler import PassEvent, Scheduler, SchedulerConfigError, parse_duration, parse_schedule_override
 from loop.watcher import WatcherService
+from loop.metrics import make_metrics_provider
+from loop.self_update import SelfUpdater
 from loop.webui import WebUIServer
 
 
@@ -41,7 +43,7 @@ def _resolve_schedule(config: Config, override: str | None):
     return {role: parse_duration(value) for role, value in raw.items()}
 
 
-def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dict[str, Optional[Scheduler]]):
+def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dict[str, Optional[Scheduler]], self_updater: Optional[SelfUpdater] = None):
     """Tick body run on every scheduler tick (build and review).
 
     REA-89 wires the self-healing checks in here so they run on the
@@ -57,6 +59,11 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
     do the actual cognitive work (AC-6). Hermes/Claude Code/Codex are
     subprocess invocations driven by the daemon itself — no external
     cron needed.
+
+    REA-128: every tick also calls `self_updater.check()` to see if
+    the engine's own git repo has new commits upstream. The check is
+    rate-limited internally (default 30m cooldown) so it doesn't hit
+    the network on every 5m tick.
     """
 
     # REA-155: resolve the agent runner once (cheap — loads at tick time
@@ -83,6 +90,10 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
             # of which pass type just ran, and review's tick already
             # fires on its own 5m cadence independent of build's.
             healer.reconcile_stale_review_handoffs()
+            # REA-128: check for engine self-updates (rate-limited
+            # internally so it doesn't fetch every tick).
+            if self_updater is not None:
+                self_updater.check()
             if role == "build":
                 from loop.pass_engine import PassEngineError, _linear_plugin
                 try:
@@ -132,12 +143,12 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
                 _run_agent_review_pass(healer, manager, _get_runner)
 
         except Exception as e:  # noqa: BLE001 - surfaced as PassFailed, not raised
-            healer.record_pass_failed()
+            healer.record_pass_failed(duration_s=time.monotonic() - start)
             manager.emit(PassFailed(role=role, issue_id=issue_id, error=str(e), timestamp=datetime.now()))
             raise
         else:
             duration = time.monotonic() - start
-            healer.record_pass_completed()
+            healer.record_pass_completed(duration_s=duration)
             manager.emit(PassCompleted(role=role, issue_id=issue_id, outcome="noop", duration_s=duration, timestamp=datetime.now()))
 
     return tick_fn
@@ -376,8 +387,9 @@ def cmd_serve(args) -> int:
         return 1
 
     healer = SelfHealer(config, manager)
+    self_updater = SelfUpdater(config, manager.emit)
     scheduler_ref: Dict[str, Optional[Scheduler]] = {"scheduler": None}
-    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager, healer, scheduler_ref), notify=manager.notify)
+    scheduler = Scheduler(schedule=schedule, tick_fn=_make_tick_fn(manager, healer, scheduler_ref, self_updater), notify=manager.notify)
     scheduler_ref["scheduler"] = scheduler
     scheduler.start()
 
@@ -392,7 +404,8 @@ def cmd_serve(args) -> int:
     )
     watcher.start()
 
-    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot, project_root=os.getcwd())
+    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot,
+                        metrics_provider=make_metrics_provider(healer.snapshot), project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
         version=__version__, plugins=[lp.name for lp in manager.plugins], timestamp=datetime.now(),
@@ -519,7 +532,31 @@ _INIT_TOML = textwrap.dedent("""\
 
     [events]
     log_file = "events.jsonl"
+
+    [self_update]
+    enabled = true
+    check_interval = "30m"
 """)
+
+
+def cmd_check_update(args) -> int:
+    """REA-128: one-shot self-update check. Fetches from origin and
+    reports whether the engine has new commits upstream. Exit 0 when
+    up-to-date, 2 when an update is available, 1 on error."""
+    config = _load_config_or_die(args.config)
+    su = SelfUpdater(config, emit_fn=lambda _: None)
+    event = su.check()
+    if event is None:
+        print(json.dumps({"update_available": False}), flush=True)
+        return 0
+    print(json.dumps({
+        "update_available": True,
+        "current_commit": event.current_commit,
+        "latest_commit": event.latest_commit,
+        "behind_by": event.behind_by,
+        "branch": event.branch,
+    }), flush=True)
+    return 2
 
 _ENV_EXAMPLE = textwrap.dedent("""\
     # Linear API (required for LinearPlugin)
@@ -666,6 +703,13 @@ def build_parser() -> argparse.ArgumentParser:
              "ready work in the queue. Exit 2 if stalled, 0 if not.",
     )
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser(
+        "check-update",
+        help="one-shot self-update check (REA-128): fetch from origin and "
+             "report whether the engine has new commits upstream",
+    )
+    p.set_defaults(func=cmd_check_update)
 
     p = sub.add_parser("init", help="scaffold a new instance directory")
     p.add_argument("dir", nargs="?", default=".", help="target directory (default: cwd)")

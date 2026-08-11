@@ -71,6 +71,9 @@ class SelfHealer:
         self.passes_failed = 0
         self.last_pass_at: Optional[float] = None
 
+        # REA-127: last pass duration for /metrics.
+        self.last_pass_duration: float = 0.0
+
         # AC-3/AC-6 counters (build-tick only; reset whenever a ready
         # issue is found).
         self._consecutive_empty_ticks = 0
@@ -609,13 +612,15 @@ class SelfHealer:
 
     # ------------------------------------------------------------ AC-5
 
-    def record_pass_completed(self) -> None:
+    def record_pass_completed(self, duration_s: float = 0.0) -> None:
         self.passes_completed += 1
         self.last_pass_at = self._now()
+        self.last_pass_duration = duration_s
 
-    def record_pass_failed(self) -> None:
+    def record_pass_failed(self, duration_s: float = 0.0) -> None:
         self.passes_failed += 1
         self.last_pass_at = self._now()
+        self.last_pass_duration = duration_s
 
     def snapshot(self) -> Dict[str, Any]:
         """`/health` payload (AC-5): uptime, pass totals, per-plugin
@@ -649,6 +654,7 @@ class SelfHealer:
             "uptime_seconds": self._now() - self._started_at,
             "passes_completed": self.passes_completed,
             "passes_failed": self.passes_failed,
+            "last_pass_duration": self.last_pass_duration,
             "plugins": plugins,
             "queue_depth": queue_depth,
             "last_pass_at": (
