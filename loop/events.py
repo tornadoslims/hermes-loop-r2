@@ -178,6 +178,17 @@ class WatcherTickTriggered:
     timestamp: datetime
 
 
+@dataclass
+class UpdateAvailable:
+    """REA-128: self-update check found new commits on the engine's upstream."""
+
+    current_commit: str
+    latest_commit: str
+    behind_by: int
+    branch: str
+    timestamp: datetime
+
+
 ALL_EVENT_TYPES: tuple = (
     PassStarted,
     PassCompleted,
@@ -198,6 +209,7 @@ ALL_EVENT_TYPES: tuple = (
     DaemonStopping,
     WatcherCommitDetected,
     WatcherTickTriggered,
+    UpdateAvailable,
 )
 
 
