@@ -54,6 +54,11 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
         try:
             healer.check_stuck_passes()
             healer.check_plugin_health()
+            # REA-120: run on every tick (build and review), not just
+            # build -- a stalled review handoff can happen regardless
+            # of which pass type just ran, and review's tick already
+            # fires on its own 5m cadence independent of build's.
+            healer.reconcile_stale_review_handoffs()
             if role == "build":
                 from loop.pass_engine import PassEngineError, _linear_plugin
                 try:

@@ -31,6 +31,7 @@ from loop.events import (
     IssueUnblocked,
     PluginDegraded,
     PluginRecovered,
+    PRCreated,
     QueueEmpty,
     QueueStalled,
     RecoveryEvent,
@@ -39,8 +40,11 @@ from loop.events import (
 from loop.pass_engine import (
     STATE_FILENAME,
     PassEngineError,
+    _github_plugin,
     _linear_plugin,
     _run,
+    branch_for_issue,
+    default_branch,
     delete_state,
     read_state,
     worktree_path,
@@ -450,6 +454,99 @@ class SelfHealer:
             self.manager.emit(event)
             recycled.append(event)
         return recycled
+
+    # ---------------------------------------------------- AC-new (REA-120)
+
+    def reconcile_stale_review_handoffs(self) -> List[PRCreated]:
+        """REA-120: every issue Linear says is `stage-in-review` /
+        In Review must have a corresponding PR on GitHub. A branch that
+        was pushed and a Linear state that says "in review" but with
+        zero PR (open or closed) referencing that branch is a stalled
+        review handoff -- `loop-review` has nothing to act on and the
+        pipeline silently stops making progress on that issue. Since
+        the commit and branch already exist (build already pushed
+        them), this is auto-recoverable: open the missing PR. Requires
+        a "github" plugin to be loaded; a no-op (empty list) when one
+        isn't configured, since there's nothing to reconcile against.
+        """
+        try:
+            linear = _linear_plugin(self.manager)
+        except PassEngineError:
+            return []
+        try:
+            github = _github_plugin(self.manager)
+        except PassEngineError:
+            return []
+        if github is None:
+            return []
+
+        try:
+            in_review = linear.list_in_review()
+        except Exception:  # noqa: BLE001 - one bad query must not crash the tick
+            return []
+
+        created: List[PRCreated] = []
+        for issue in in_review:
+            issue_id = issue.get("identifier")
+            title = issue.get("title", "")
+            if not issue_id:
+                continue
+            branch = branch_for_issue(issue_id, title)
+            try:
+                pr = github.find_pr(branch, state="all")
+            except Exception:  # noqa: BLE001 - isolate one bad lookup
+                continue
+            if pr is not None:
+                continue  # PR already exists (open or closed) -- nothing stalled here
+
+            # Confirm the branch actually made it to origin before trying
+            # to open a PR against it -- an issue can be `stage-in-review`
+            # with no pushed branch yet for reasons unrelated to REA-120
+            # (e.g. mid-flight manual relabel), and that's not ours to fix.
+            code, out, _ = _run(
+                ["git", "ls-remote", "--heads", "origin", branch],
+                cwd=self.config.root, timeout=30,
+            )
+            if code != 0 or not out.strip():
+                continue
+
+            base = default_branch(self.config)
+            try:
+                new_pr = github.create_pr(
+                    title=f"{issue_id}: {title}" if title else issue_id,
+                    head=branch,
+                    base=base,
+                    body=f"Closes #{issue_id}" if issue_id.isdigit() else "",
+                )
+            except Exception as e:  # noqa: BLE001 - one failed PR create must not break the scan
+                try:
+                    linear.add_comment(
+                        issue_id,
+                        f"\u26a0 Reconciliation: branch `{branch}` exists on origin and "
+                        f"Linear says In Review, but no GitHub PR was found and "
+                        f"auto-creating one failed: {e}. Needs a human look.",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+
+            try:
+                linear.add_comment(
+                    issue_id,
+                    f"\u26a0 Reconciliation: found a stalled review handoff -- branch "
+                    f"`{branch}` was pushed and Linear said In Review, but no GitHub "
+                    f"PR existed. Auto-opened {new_pr.get('url')}.",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            event = PRCreated(
+                issue_id=issue_id, pr_number=str(new_pr.get("pr_number", "")),
+                url=new_pr.get("url", ""), timestamp=datetime.now(),
+            )
+            self.manager.emit(event)
+            created.append(event)
+        return created
 
     # ------------------------------------------------------------ AC-4
 

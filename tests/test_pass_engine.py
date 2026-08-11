@@ -128,6 +128,31 @@ def _manager_with(plugin):
     return FakeManager([FakeLoadedPlugin("linear", plugin)])
 
 
+def _manager_with_github(linear, github):
+    return FakeManager([FakeLoadedPlugin("linear", linear), FakeLoadedPlugin("github", github)])
+
+
+class FakeGitHubPlugin:
+    """Stand-in for loop.plugins.github.GitHubPlugin (REA-120): only the
+    two methods pass_engine's PR-atomicity path calls."""
+
+    def __init__(self, existing_pr=None, create_result=None, create_error=None):
+        self.calls = []
+        self._existing_pr = existing_pr
+        self._create_result = create_result or {"pr_number": 1, "url": "https://x/1"}
+        self._create_error = create_error
+
+    def find_pr(self, head_branch, state="all"):
+        self.calls.append(("find_pr", head_branch, state))
+        return self._existing_pr
+
+    def create_pr(self, title, head, base, body):
+        self.calls.append(("create_pr", title, head, base, body))
+        if self._create_error:
+            raise self._create_error
+        return self._create_result
+
+
 def _empty_manager():
     return FakeManager([])
 
@@ -431,3 +456,97 @@ def test_pass_end_review_unknown_outcome_raises(tmp_path):
     wt = pass_engine.worktree_path(config, "review")
     with pytest.raises(PassEngineError, match="unknown review outcome"):
         pass_end("review", manager=manager, config=config, worktree=wt, outcome="bogus")
+
+
+# --------------------------------------------------------------------- REA-120
+
+def test_pass_end_build_opens_pr_before_moving_to_review(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-120", "title": "Fix pr gap", "url": "u"}])
+    github = FakeGitHubPlugin()
+    manager = _manager_with_github(linear, github)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    with open(os.path.join(wt, "new_file.py"), "w") as f:
+        f.write("print('hi')\n")
+
+    result = pass_end("build", manager=manager, config=config, worktree=wt)
+
+    assert result["ok"] is True
+    assert result["pr_url"] == "https://x/1"
+    create_calls = [c for c in github.calls if c[0] == "create_pr"]
+    assert len(create_calls) == 1
+    assert create_calls[0][2] == "rea-120-fix-pr-gap"  # head branch
+    # move_to_review only happens after the PR create call above.
+    assert ("move_to_review", "REA-120") in linear.calls
+    move_index = linear.calls.index(("move_to_review", "REA-120"))
+    # create_pr on github happened before move_to_review on linear.
+    assert move_index > 0
+
+
+def test_pass_end_build_reuses_existing_pr_without_recreating(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-121", "title": "Already has pr", "url": "u"}])
+    github = FakeGitHubPlugin(existing_pr={"pr_number": 5, "url": "https://x/5"})
+    manager = _manager_with_github(linear, github)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    result = pass_end("build", manager=manager, config=config, worktree=wt)
+
+    assert result["pr_url"] == "https://x/5"
+    assert not any(c[0] == "create_pr" for c in github.calls)
+    assert ("move_to_review", "REA-121") in linear.calls
+
+
+def test_pass_end_build_does_not_move_to_review_when_pr_creation_fails(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-122", "title": "Pr fails", "url": "u"}])
+    github = FakeGitHubPlugin(create_error=RuntimeError("HTTP 500: server error"))
+    manager = _manager_with_github(linear, github)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    with pytest.raises(PassEngineError, match="PR creation failed"):
+        pass_end("build", manager=manager, config=config, worktree=wt)
+
+    assert not any(c[0] == "move_to_review" for c in linear.calls)
+    # The branch itself was still pushed -- only the review transition is blocked.
+    code, out, _ = pass_engine._run(
+        ["git", "ls-remote", "--heads", "origin", "rea-122-pr-fails"], cwd=wt
+    )
+    assert code == 0 and "rea-122-pr-fails" in out
+    # State file is preserved for a retry, not deleted.
+    assert os.path.isfile(os.path.join(wt, ".loop.pass.json"))
+
+
+def test_pass_end_build_without_github_plugin_unchanged(tmp_path):
+    """No github plugin configured -- behavior identical to pre-REA-120."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-123", "title": "No github", "url": "u"}])
+    manager = _manager_with(linear)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    result = pass_end("build", manager=manager, config=config, worktree=wt)
+
+    assert result["ok"] is True
+    assert "pr_url" not in result
+    assert ("move_to_review", "REA-123") in linear.calls
