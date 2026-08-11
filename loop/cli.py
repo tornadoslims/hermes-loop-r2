@@ -138,7 +138,7 @@ def cmd_serve(args) -> int:
     scheduler_ref["scheduler"] = scheduler
     scheduler.start()
 
-    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot)
+    webui = WebUIServer(host=args.host, port=args.port, health_provider=healer.snapshot, project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
         version=__version__, plugins=[lp.name for lp in manager.plugins], timestamp=datetime.now(),

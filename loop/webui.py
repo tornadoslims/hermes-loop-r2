@@ -1,40 +1,73 @@
 """Web UI server for hermes-loop-r2.
 
-NG-1 (REA-85): the full admin UI is out of scope -- this is just enough
-to prove the daemon is alive at `/` (placeholder HTML) and, as of
-REA-89 AC-5, expose a machine-readable `/health` endpoint that reports
-the daemon's pulse: uptime, pass counts, per-plugin health, queue depth,
-and the last pass timestamp. External monitoring (or a human) polls
-this instead of parsing logs.
+NG-1 (REA-85/REA-125): the full admin dashboard is out of scope.
+This module provides a dark-themed status page at `/`, a static-file
+server at `/static/*`, and the machine-readable `/health` endpoint
+(REA-89 AC-5) for external monitoring.
 """
 from __future__ import annotations
 
 import http.server
 import json
+import mimetypes
+import os
 import threading
+from string import Template
 from typing import Any, Callable, Dict, Optional
-
-PLACEHOLDER_HTML = b"""<!doctype html>
-<html><head><title>hermes-loop-r2</title></head>
-<body><h1>hermes-loop-r2 is running</h1></body></html>
-"""
 
 # Type of the callback WebUIServer calls on every GET /health: takes no
 # args, returns a JSON-serializable dict shaped per REA-89 AC-5.
 HealthProvider = Callable[[], Dict[str, Any]]
 
+# Cache the MIME type lookup so we don't re-init every request.
+_mimetypes_initialized = False
 
-def _make_handler(health_provider: Optional[HealthProvider]):
+_MIME_UNKNOWN = "application/octet-stream"
+
+
+def _ensure_mimetypes() -> None:
+    global _mimetypes_initialized
+    if not _mimetypes_initialized:
+        mimetypes.init()
+        _mimetypes_initialized = True
+
+
+def _guess_mime(path: str) -> str:
+    _ensure_mimetypes()
+    mime, _ = mimetypes.guess_type(path)
+    return mime or _MIME_UNKNOWN
+
+
+def _make_handler(
+    health_provider: Optional[HealthProvider],
+    static_dir: str,
+    templates_dir: str,
+):
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - required signature name
+            # /health — machine-readable JSON (unchanged from REA-89)
             if self.path == "/health" and health_provider is not None:
                 self._respond_json(health_provider())
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(PLACEHOLDER_HTML)))
+
+            # /static/* — serve static assets
+            if self.path.startswith("/static/"):
+                self._serve_static(self.path[len("/static/"):])
+                return
+
+            # / — dark-themed status page
+            if self.path == "/":
+                self._render_template("index.html", {
+                    "status": "running",
+                    "version": "0.1.0",
+                })
+                return
+
+            # Everything else — 404
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(PLACEHOLDER_HTML)
+            self.wfile.write(b"Not Found")
 
         def _respond_json(self, payload: Dict[str, Any]) -> None:
             body = json.dumps(payload).encode()
@@ -44,6 +77,52 @@ def _make_handler(health_provider: Optional[HealthProvider]):
             self.end_headers()
             self.wfile.write(body)
 
+        def _render_template(self, name: str, vars: Dict[str, str]) -> None:
+            path = os.path.join(templates_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    src = f.read()
+            except (FileNotFoundError, PermissionError, IsADirectoryError):
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Template Not Found")
+                return
+
+            rendered = Template(src).safe_substitute(**vars).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(rendered)))
+            self.end_headers()
+            self.wfile.write(rendered)
+
+        def _serve_static(self, rel: str) -> None:
+            # Prevent path traversal: reject paths with ".." segments.
+            if ".." in rel.split("/"):
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Bad Request")
+                return
+
+            path = os.path.join(static_dir, rel)
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except (FileNotFoundError, PermissionError, IsADirectoryError):
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Not Found")
+                return
+
+            content_type = _guess_mime(path)
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def log_message(self, format, *args):  # noqa: A002 - matches base signature
             pass
 
@@ -51,20 +130,39 @@ def _make_handler(health_provider: Optional[HealthProvider]):
 
 
 class WebUIServer:
-    """Runs the placeholder HTTP server (plus `/health`, REA-89 AC-5) on
-    a background thread so `loop serve` can keep doing other work
-    (scheduler, plugin lifecycle) on the main thread."""
+    """Runs the HTTP server on a background thread.
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765,
-                 health_provider: Optional[HealthProvider] = None):
+    Serves the dark-themed status page at ``/``, static assets at
+    ``/static/*``, and the machine-readable ``/health`` endpoint
+    (REA-89 AC-5).
+    """
+
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8765,
+        health_provider: Optional[HealthProvider] = None,
+        project_root: Optional[str] = None,
+    ):
         self.host = host
         self.port = port
         self.health_provider = health_provider
+        self._project_root = project_root or os.getcwd()
         self._httpd: Optional[http.server.HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
+    @property
+    def static_dir(self) -> str:
+        return os.path.join(self._project_root, "webui", "static")
+
+    @property
+    def templates_dir(self) -> str:
+        return os.path.join(self._project_root, "webui", "templates")
+
     def start(self) -> None:
-        handler = _make_handler(self.health_provider)
+        handler = _make_handler(
+            self.health_provider, self.static_dir, self.templates_dir
+        )
         self._httpd = http.server.HTTPServer((self.host, self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
