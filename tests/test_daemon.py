@@ -483,6 +483,63 @@ def test_auto_unblock_ignores_blocked_issue_with_no_dependency_text(tmp_path):
     assert healer.auto_unblock() == []
 
 
+# ------------------------------------------------------------------ REA-102 AC (orphaned blocked labels)
+
+def test_auto_unblock_orphaned_recovers_bare_blocked_label(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{
+        "identifier": "REA-85",
+        "description": "no dependency reference here",
+        "labels": {"nodes": [{"name": "blocked"}]},
+    }]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.auto_unblock_orphaned()
+
+    assert len(events) == 1
+    assert isinstance(events[0], IssueUnblocked)
+    assert events[0].issue_id == "REA-85"
+    assert events[0].previously_blocked_by == []
+    assert ("remove_label", "REA-85", "blocked") in linear.calls
+    assert ("add_label", "REA-85", "agent-ready") in linear.calls
+    assert any(c[0] == "add_comment" for c in linear.calls)
+
+
+def test_auto_unblock_orphaned_leaves_real_dependency_alone(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{
+        "identifier": "REA-86",
+        "description": "Depends on REA-85",
+        "labels": {"nodes": [{"name": "blocked"}]},
+    }]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    assert healer.auto_unblock_orphaned() == []
+    assert ("remove_label", "REA-86", "blocked") not in linear.calls
+
+
+def test_auto_unblock_orphaned_leaves_human_escalated_issue_alone(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{
+        "identifier": "REA-9",
+        "description": "no dependency reference here either",
+        "labels": {"nodes": [{"name": "blocked"}, {"name": "needs-human-review"}]},
+    }]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    assert healer.auto_unblock_orphaned() == []
+    assert ("remove_label", "REA-9", "blocked") not in linear.calls
+
+
 # ------------------------------------------------------------------ REA-90 AC-4
 
 def test_check_queue_drain_emits_after_three_consecutive_ticks(tmp_path):
@@ -557,9 +614,12 @@ def test_recycle_stuck_issues_marks_blocked_after_three_attempts(tmp_path):
 
     assert events[0].attempt == 3
     assert ("add_label", "REA-9", "blocked") in linear.calls
-    # The final attempt marks blocked, not agent-ready.
+    # REA-102: the final attempt pairs `blocked` with `needs-human-review`
+    # so an orphan-detection scan never mistakes this escalation for an
+    # unexplained label and "helpfully" clears it.
+    assert ("add_label", "REA-9", "needs-human-review") in linear.calls
     add_label_calls = [c for c in linear.calls if c[0] == "add_label"]
-    assert add_label_calls[-1] == ("add_label", "REA-9", "blocked")
+    assert add_label_calls[-1] == ("add_label", "REA-9", "needs-human-review")
 
 
 def test_recycle_stuck_issues_ignores_fresh_in_progress(tmp_path):

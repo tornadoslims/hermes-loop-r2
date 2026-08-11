@@ -275,6 +275,78 @@ class SelfHealer:
             unblocked.append(event)
         return unblocked
 
+    # ---------------------------------------------------- AC-2b (REA-102)
+
+    def auto_unblock_orphaned(self) -> List[IssueUnblocked]:
+        """REA-102: a `blocked` label must always be paired with a
+        machine-checkable reference -- either a "Depends on REA-NN"
+        declaration (handled by `auto_unblock` above) or an explicit
+        `needs-human-review` escalation label (applied by
+        `recycle_stuck_issues` when it gives up on an issue). A `blocked`
+        label with *neither* is an orphan: something applied it without
+        recording why, and left unchecked it silently starves the whole
+        ready queue (this is exactly what happened to REA-85 -- a
+        `blocked` label survived a crash-recovery comment that had
+        already cleared the real reason for it).
+
+        This scan is deliberately narrower than `auto_unblock`: it never
+        tries to verify a dependency is met (there is none to check) --
+        it only removes a `blocked` label that has no dependency text
+        AND no `needs-human-review` escalation marker, restores
+        `agent-ready`, and leaves an explanatory comment so the removal
+        is auditable. An issue correctly escalated via
+        `needs-human-review` is left alone; a human decides when to
+        clear that one. Call this alongside `auto_unblock` on every
+        build tick, before `list_ready()`, so a queue-starving orphan
+        never has to wait for the next crash-recovery pass to notice
+        it."""
+        try:
+            linear = _linear_plugin(self.manager)
+            blocked = linear.list_blocked()
+        except PassEngineError:
+            return []
+
+        recovered: List[IssueUnblocked] = []
+        for issue in blocked:
+            issue_id = issue.get("identifier")
+            if not issue_id:
+                continue
+
+            names = {
+                l["name"].lower()
+                for l in issue.get("labels", {}).get("nodes", [])
+            }
+            if "needs-human-review" in names:
+                continue  # legitimately escalated -- not ours to touch
+
+            try:
+                comments = linear.get_comments(issue_id) if hasattr(linear, "get_comments") else []
+            except Exception:  # noqa: BLE001 - never let one bad issue break the scan
+                comments = []
+            try:
+                deps = linear.parse_dependencies(issue.get("description", ""), comments)
+            except Exception:  # noqa: BLE001
+                continue
+            if deps:
+                continue  # has a real, checkable dependency -- auto_unblock owns this one
+
+            linear.remove_label(issue_id, "blocked")
+            linear.add_label(issue_id, "agent-ready")
+            linear.add_comment(
+                issue_id,
+                "\u26a0 Auto-recovered: this issue was labeled `blocked` with "
+                "no parseable \"Depends on REA-NN\" reference and no "
+                "`needs-human-review` escalation, so the self-healing "
+                "daemon could not verify why it was blocked. Removed "
+                "`blocked` and restored `agent-ready` rather than let it "
+                "silently starve the ready queue.",
+            )
+            event = IssueUnblocked(issue_id=issue_id, previously_blocked_by=[],
+                                    timestamp=datetime.now())
+            self.manager.emit(event)
+            recovered.append(event)
+        return recovered
+
     # ---------------------------------------------------------- AC-4 (REA-90)
 
     def check_queue_drain(self, ready_count: int, blocked_ready_count: int) -> Optional[QueueStalled]:
@@ -348,6 +420,14 @@ class SelfHealer:
             if attempt >= 3:
                 linear.unassign_issue(issue_id)
                 linear.add_label(issue_id, "blocked")
+                # REA-102: pair every `blocked` label with a machine-checkable
+                # reference. This path isn't a dependency block -- it's a
+                # human escalation -- so it gets `needs-human-review` instead
+                # of a "Depends on REA-NN" comment. `auto_unblock_orphaned`
+                # below treats `needs-human-review` as a valid reference and
+                # will not touch it, only a *bare* `blocked` label with
+                # neither marker.
+                linear.add_label(issue_id, "needs-human-review")
                 linear.add_comment(
                     issue_id,
                     f"\u26a0 Auto-recycled {attempt} times (In Progress > "
