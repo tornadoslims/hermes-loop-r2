@@ -157,6 +157,19 @@ class PluginManager:
         self.init_all()
         self.start_all()
 
+    def notify(self, event: Any) -> None:
+        """Forward a scheduler PassEvent to every loaded plugin that wants
+        it. Plugins are not required to handle events -- only those
+        defining an `on_event(event)` method receive the callback, so
+        existing plugins (which only implement the four Plugin ABC
+        lifecycle methods) keep working unchanged."""
+        for lp in self.plugins:
+            if lp.error or lp.instance is None:
+                continue
+            handler = getattr(lp.instance, "on_event", None)
+            if callable(handler):
+                handler(event)
+
     def status_report(self) -> List[Dict[str, Any]]:
         report = []
         for lp in self.plugins:

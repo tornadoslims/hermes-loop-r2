@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -94,3 +95,29 @@ def test_cli_help_lists_subcommands():
     assert "serve" in result.stdout
     assert "plugin" in result.stdout
     assert "version" in result.stdout
+
+
+def test_serve_schedule_override_produces_ticks(tmp_path):
+    toml_path, _plugin_dir = _write_config(tmp_path, enabled=[])
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "loop.cli",
+            "--config", str(toml_path),
+            "serve", "--port", "0", "--schedule", "build=1s,review=1s",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        time.sleep(4)
+    finally:
+        proc.terminate()
+        try:
+            out, _ = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate(timeout=10)
+
+    assert out.count("[scheduler] build tick starting") >= 2
+    assert out.count("[scheduler] review tick starting") >= 2

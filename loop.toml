@@ -5,3 +5,7 @@ enabled = ["linear"]
 [plugins.config.linear]
 # team_key = "REA"  # optional; only required if the Linear workspace has
 #                    # more than one team. Falls back to LINEAR_TEAM_KEY / .env.
+
+[pipeline]
+schedule_build = "5m"
+schedule_review = "5m"

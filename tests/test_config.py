@@ -17,6 +17,22 @@ def test_load_minimal_config(tmp_path):
     assert cfg.plugins.dir == str(tmp_path / "plugins")
     assert cfg.plugins.enabled == []
     assert cfg.plugin_config("linear") == {}
+    assert cfg.pipeline.schedule_build == "5m"
+    assert cfg.pipeline.schedule_review == "5m"
+
+
+def test_load_pipeline_section(tmp_path):
+    path = _write(
+        tmp_path,
+        """
+[pipeline]
+schedule_build = "10m"
+schedule_review = "15m"
+""",
+    )
+    cfg = load_config(path)
+    assert cfg.pipeline.schedule_build == "10m"
+    assert cfg.pipeline.schedule_review == "15m"
 
 
 def test_load_plugins_section(tmp_path):
