@@ -86,6 +86,108 @@ def test_plugin_validate_fails_for_broken_plugin(tmp_path, capsys):
     assert "stop" in report[0]["error"]
 
 
+# AC-3: validate a specific plugin by name.
+
+
+VALIDATE_FAIL_PLUGIN = textwrap.dedent(
+    """
+    from loop.plugins.base import Plugin
+
+    class ValidateFailPlugin(Plugin):
+        def init(self, config):
+            pass
+        def start(self):
+            pass
+        def stop(self):
+            pass
+        def status(self):
+            return {"ok": True}
+        def validate(self):
+            return False
+    """
+)
+
+
+VALIDATE_RAISE_PLUGIN = textwrap.dedent(
+    """
+    from loop.plugins.base import Plugin
+
+    class ValidateRaisePlugin(Plugin):
+        def init(self, config):
+            pass
+        def start(self):
+            pass
+        def stop(self):
+            pass
+        def status(self):
+            return {"ok": True}
+        def validate(self):
+            raise RuntimeError("connection refused")
+    """
+)
+
+
+def test_plugin_validate_name_passes_for_good_plugin(tmp_path, capsys):
+    toml_path, plugin_dir = _write_config(tmp_path, enabled=["good"])
+    (plugin_dir / "good.py").write_text(GOOD_PLUGIN)
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "good"])
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report[0]["name"] == "good"
+    assert report[0]["status"] == "loaded"
+
+
+def test_plugin_validate_name_fails_for_broken_plugin(tmp_path, capsys):
+    toml_path, plugin_dir = _write_config(tmp_path, enabled=["broken"])
+    (plugin_dir / "broken.py").write_text(BROKEN_PLUGIN)
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "broken"])
+    assert rc == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report[0]["status"] == "error"
+    assert "stop" in report[0]["error"]
+
+
+def test_plugin_validate_name_not_in_enabled(tmp_path, capsys):
+    toml_path, plugin_dir = _write_config(tmp_path, enabled=["good"])
+    (plugin_dir / "good.py").write_text(GOOD_PLUGIN)
+    (plugin_dir / "other.py").write_text(GOOD_PLUGIN)
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "other"])
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "not in [plugins].enabled" in stderr
+
+
+def test_plugin_validate_name_file_not_found(tmp_path, capsys):
+    toml_path, _plugin_dir = _write_config(tmp_path, enabled=[])
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "nope"])
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "not found" in stderr
+
+
+def test_plugin_validate_name_calls_self_check_false(tmp_path, capsys):
+    toml_path, plugin_dir = _write_config(tmp_path, enabled=["failer"])
+    (plugin_dir / "failer.py").write_text(VALIDATE_FAIL_PLUGIN)
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "failer"])
+    assert rc == 1
+
+
+def test_plugin_validate_name_self_check_raises(tmp_path, capsys):
+    toml_path, plugin_dir = _write_config(tmp_path, enabled=["raiser"])
+    (plugin_dir / "raiser.py").write_text(VALIDATE_RAISE_PLUGIN)
+
+    rc = main(["--config", str(toml_path), "plugin", "validate", "raiser"])
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "self-check raised" in stderr
+    assert "connection refused" in stderr
+
+
 def test_cli_help_lists_subcommands():
     result = subprocess.run(
         [sys.executable, "-m", "loop.cli", "--help"],
@@ -302,7 +404,7 @@ def test_status_parses_health_payload(tmp_path, capsys):
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "up 1h 1m 1s" in out
+    assert "running (up 1h 1m 1s)" in out
     assert "10 completed" in out
     assert "2 failed" in out
     assert "all healthy" in out

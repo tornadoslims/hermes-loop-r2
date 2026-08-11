@@ -497,6 +497,49 @@ def cmd_plugin_list(args) -> int:
 def cmd_plugin_validate(args) -> int:
     config = _load_config_or_die(args.config)
     manager = PluginManager(config)
+
+    if args.name:
+        # Validate a specific plugin by name.
+        plugin_dir = config.plugins.dir
+        enabled = config.plugins.enabled
+        if enabled and args.name not in enabled:
+            print(
+                f"plugin {args.name!r} is not in [plugins].enabled",
+                file=sys.stderr,
+            )
+            return 1
+        path = os.path.join(plugin_dir, f"{args.name}.py")
+        if not os.path.isfile(path):
+            print(
+                f"plugin {args.name!r} not found at {path!r}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Force load only the named plugin.
+        manager.config.plugins.enabled = [args.name]
+        manager.discover(validate_only=True)
+        lp = manager.plugins[0] if manager.plugins else None
+
+        if lp is None or lp.error:
+            errors = [lp.error] if lp and lp.error else ["plugin not found"]
+            print(json.dumps(manager.status_report(), indent=2))
+            return 1
+
+        # Call the plugin's self-check.
+        try:
+            ok = lp.instance.validate()
+        except Exception as e:
+            print(
+                f"plugin {args.name!r} self-check raised: {e}",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(json.dumps(manager.status_report(), indent=2))
+        return 0 if ok else 1
+
+    # No name given — validate all (existing behaviour).
     manager.discover(validate_only=True)
     errors = [lp for lp in manager.plugins if lp.error]
     print(json.dumps(manager.status_report(), indent=2))
@@ -644,7 +687,7 @@ def cmd_status(args) -> int:
     queue_depth = data.get("queue_depth")
     last_pass_at = data.get("last_pass_at")
 
-    print(f"daemon:         up {uptime}")
+    print(f"daemon:         running (up {uptime})")
     print(f"passes:         {completed} completed, {failed} failed ({total} total)")
 
     unhealthy = {name: info for name, info in plugins.items()
@@ -690,7 +733,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = plugin_sub.add_parser("list", help="list configured plugins and their status")
     p.set_defaults(func=cmd_plugin_list)
 
-    p = plugin_sub.add_parser("validate", help="validate all plugins without starting the daemon")
+    p = plugin_sub.add_parser("validate", help="validate a single plugin or all plugins")
+    p.add_argument("name", nargs="?", default=None, help="plugin name to validate (omit to validate all)")
     p.set_defaults(func=cmd_plugin_validate)
 
     p = sub.add_parser("version", help="print the hermes-loop-r2 version")
