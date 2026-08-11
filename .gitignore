@@ -10,3 +10,4 @@ build/
 dist/
 events.jsonl
 
+.loop-recovered-diffs/
