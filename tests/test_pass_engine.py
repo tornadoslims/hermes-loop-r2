@@ -16,12 +16,16 @@ from loop.pass_engine import (
     PassEngineEvent,
     branch_for_issue,
     cleanup_worktree,
+    clear_agent_pid,
     create_worktree,
+    has_existing_build_state,
     pass_end,
     read_state,
+    resume_build,
     slugify,
     start_build,
     start_review,
+    update_agent_pid,
     write_state,
 )
 
@@ -550,3 +554,112 @@ def test_pass_end_build_without_github_plugin_unchanged(tmp_path):
     assert result["ok"] is True
     assert "pr_url" not in result
     assert ("move_to_review", "REA-123") in linear.calls
+
+
+# ------------------------------------------------------------------ REA-100
+
+def test_update_agent_pid_writes_to_state_file(tmp_path):
+    """update_agent_pid() records the agent PID and started_at in the state file."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\n  enabled = ["linear"]\n\n[pipeline]\n  schedule_build = "5m"\n  schedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-100", "title": "Test PID", "url": "u"}])
+    manager = _manager_with(linear)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    state = update_agent_pid(wt, 12345)
+
+    assert state["agent_pid"] == 12345
+    assert "agent_started_at" in state
+    # Re-read to verify it persisted.
+    re_read = read_state(wt)
+    assert re_read["agent_pid"] == 12345
+
+
+def test_clear_agent_pid_removes_from_state_file(tmp_path):
+    """clear_agent_pid() removes the agent PID and started_at fields."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-101", "title": "Test Clear", "url": "u"}])
+    manager = _manager_with(linear)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    update_agent_pid(wt, 12345)
+    clear_agent_pid(wt)
+
+    re_read = read_state(wt)
+    assert "agent_pid" not in re_read
+    assert "agent_started_at" not in re_read
+
+
+def test_clear_agent_pid_noop_when_no_state_file(tmp_path):
+    """clear_agent_pid() is a no-op when there's no state file."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    wt = pass_engine.worktree_path(config, "build")
+    # No state file exists — should not raise.
+    clear_agent_pid(wt)
+
+
+def test_has_existing_build_state_detects_state_file(tmp_path):
+    """has_existing_build_state() returns True when a state file exists."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-102", "title": "Exists", "url": "u"}])
+    manager = _manager_with(linear)
+    start_build(config, manager)
+
+    assert has_existing_build_state(config) is True
+
+
+def test_has_existing_build_state_returns_false_when_no_state(tmp_path):
+    """has_existing_build_state() returns False when no state file exists."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    # No pass has been started — no state file.
+    assert has_existing_build_state(config) is False
+
+
+def test_resume_build_reads_state_file_without_claiming(tmp_path):
+    """resume_build() reads the existing state file and returns the issue
+    contract without claiming a new issue from Linear."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\n  enabled = ["linear"]\n\n[pipeline]\n  schedule_build = "5m"\n  schedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-103", "title": "Resume Me", "url": "u"}])
+    manager = _manager_with(linear)
+
+    # First pass: claim and set up.
+    start_build(config, manager)
+    # Verify claim happened (claim_issue may include optional state argument).
+    assert any(c[0] == "claim_issue" and c[1] == "REA-103" for c in linear.calls)
+
+    # Now simulate resume: a new manager that would have different ready issues.
+    linear2 = FakeLinearPlugin(ready=[{"identifier": "REA-999", "title": "Should Not Claim", "url": "u"}])
+    manager2 = _manager_with(linear2)
+
+    event = resume_build(config, manager2)
+
+    assert event.action == "resuming"
+    assert event.phase == "resuming"
+    assert event.issue == "REA-103"
+    # The new manager should NOT have claimed REA-999.
+    assert ("claim_issue", "REA-999") not in linear2.calls

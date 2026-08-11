@@ -14,6 +14,10 @@ cadence so the pipeline needs no external cron/watchdog babysitting:
   AC-8 every threshold is read from `config.pipeline` -- nothing here is
        hardcoded.
 
+REA-100 AC-1/AC-3/AC-4: agent process tracking -- detect orphaned agent
+processes (PID gone), kill stuck agents (past pass_timeout), and emit
+AgentDied/AgentKilled events so plugins can observe pass health.
+
 NG-3: this module heals the *running process'* own state (worktrees,
 Linear issues, plugin lifecycle) -- it never touches or updates the
 engine's own code.
@@ -21,12 +25,15 @@ engine's own code.
 from __future__ import annotations
 
 import os
+import signal
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from loop.config import Config
 from loop.events import (
+    AgentDied,
+    AgentKilled,
     IssueRecycled,
     IssueUnblocked,
     PluginDegraded,
@@ -94,11 +101,40 @@ class SelfHealer:
         self._plugin_restart_failures: Dict[str, int] = {}
         self._degraded_plugins: Set[str] = set()
 
+    # -------------------------------------------------- REA-100 PID helpers
+
+    @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        """Return True if a process with the given PID is still running."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+
+    @staticmethod
+    def _kill_agent_pid(pid: int) -> bool:
+        """Kill an agent process by PID. Returns True if the signal was
+        sent, False if the process was already gone."""
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+
     # ------------------------------------------------------------ AC-1
 
     def check_stuck_passes(self) -> List[RecoveryEvent]:
         """Scan both worktrees' `.loop.pass.json` for staleness beyond
-        `pipeline.pass_timeout` and recover any that are stuck."""
+        `pipeline.pass_timeout` and recover any that are stuck.
+
+        REA-100 AC-1/AC-3/AC-4: if the state file has an `agent_pid`,
+        check if that PID is still alive first:
+        - PID alive + within timeout: skip (pass is in progress).
+        - PID alive + past timeout: kill the agent, then recover (AC-4).
+        - PID dead: agent died unexpectedly → recover immediately (AC-3).
+        - No PID (legacy): fall back to mtime-based staleness check.
+        """
         timeout_s = parse_duration(self.config.pipeline.pass_timeout)
         recovered: List[RecoveryEvent] = []
         for role in ("build", "review"):
@@ -106,25 +142,63 @@ class SelfHealer:
             state_path = os.path.join(wt, STATE_FILENAME)
             if not os.path.isfile(state_path):
                 continue
-            age_s = self._now() - os.path.getmtime(state_path)
-            if age_s < timeout_s:
+
+            # Read state to check for agent PID.
+            try:
+                state = read_state(wt)
+            except PassEngineError:
                 continue
-            event = self._recover_pass(role, wt, age_s, timeout_s)
+
+            agent_pid = state.get("agent_pid")
+            issue_id = state.get("issue_id", "")
+
+            if agent_pid is not None:
+                pid_alive = self._is_pid_alive(agent_pid)
+                agent_age_s = 0.0
+                agent_started = state.get("agent_started_at")
+                if agent_started:
+                    agent_age_s = self._now() - agent_started
+
+                if pid_alive and agent_age_s < timeout_s:
+                    # AC-1: agent is alive and within timeout -- not stuck.
+                    continue
+
+                if pid_alive and agent_age_s >= timeout_s:
+                    # AC-4: agent exceeded timeout with no completion.
+                    # Kill it, then recover.
+                    self._kill_agent_pid(agent_pid)
+                    event = AgentKilled(
+                        role=role, issue_id=issue_id, pid=agent_pid,
+                        age_s=agent_age_s, timeout_s=timeout_s,
+                        timestamp=datetime.now(),
+                    )
+                    self.manager.emit(event)
+                else:
+                    # AC-3: agent PID is dead -- died unexpectedly.
+                    event = AgentDied(
+                        role=role, issue_id=issue_id,
+                        reason=f"agent PID {agent_pid} no longer running (age {agent_age_s:.0f}s)",
+                        pid=agent_pid, timestamp=datetime.now(),
+                    )
+                    self.manager.emit(event)
+            else:
+                # Legacy: no agent_pid — fall back to mtime staleness.
+                file_age_s = self._now() - os.path.getmtime(state_path)
+                if file_age_s < timeout_s:
+                    continue
+
+            # Recover by whatever path we got here.
+            event = self._recover_pass(role, wt, issue_id=issue_id)
             if event:
                 recovered.append(event)
         return recovered
 
-    def _recover_pass(self, role: str, wt: str, age_s: float,
-                       timeout_s: float) -> Optional[RecoveryEvent]:
-        try:
-            state = read_state(wt)
-        except PassEngineError:
-            return None
-
-        issue_id = state.get("issue_id", "")
-        branch = state.get("branch")
-
-        # Save any in-progress diff before touching the worktree.
+    def _recover_pass(self, role: str, wt: str, issue_id: str = "",
+                       branch: Optional[str] = None) -> Optional[RecoveryEvent]:
+        """Save any in-progress diff, reset the worktree, unclaim the
+        issue, and return it to the ready queue. `issue_id` and `branch`
+        can be supplied by the caller (from a state file already read)
+        to avoid re-reading."""
         diff_dir = os.path.join(self.config.root, "recovered")
         os.makedirs(diff_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
@@ -146,8 +220,7 @@ class SelfHealer:
                 linear.add_label(issue_id, "agent-ready")
                 linear.add_comment(
                     issue_id,
-                    f"\u26a0 {role} pass exceeded pass_timeout "
-                    f"({age_s:.0f}s, branch `{branch}`). Auto-recovered by "
+                    f"\u26a0 {role} pass auto-recovered by "
                     f"the self-healing daemon: worktree reset, issue "
                     f"returned to the ready queue.",
                 )
@@ -156,7 +229,7 @@ class SelfHealer:
 
         delete_state(wt)
 
-        reason = f"pass state file age {age_s:.0f}s >= pass_timeout {timeout_s:.0f}s"
+        reason = f"pass recovered by self-healing daemon"
         event = RecoveryEvent(role=role, issue_id=issue_id, reason=reason,
                                timestamp=datetime.now())
         self.manager.emit(event)
@@ -427,13 +500,6 @@ class SelfHealer:
             if attempt >= 3:
                 linear.unassign_issue(issue_id)
                 linear.add_label(issue_id, "blocked")
-                # REA-102: pair every `blocked` label with a machine-checkable
-                # reference. This path isn't a dependency block -- it's a
-                # human escalation -- so it gets `needs-human-review` instead
-                # of a "Depends on REA-NN" comment. `auto_unblock_orphaned`
-                # below treats `needs-human-review` as a valid reference and
-                # will not touch it, only a *bare* `blocked` label with
-                # neither marker.
                 linear.add_label(issue_id, "needs-human-review")
                 linear.add_comment(
                     issue_id,

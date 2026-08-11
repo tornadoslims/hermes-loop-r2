@@ -12,6 +12,8 @@ import pytest
 from loop.config import load_config
 from loop.daemon import SelfHealer
 from loop.events import (
+    AgentDied,
+    AgentKilled,
     IssueRecycled,
     IssueUnblocked,
     PluginDegraded,
@@ -768,3 +770,111 @@ def test_reconcile_stale_review_handoff_comments_when_pr_create_fails(tmp_path):
         c[0] == "add_comment" and c[1] == "REA-85" and "rate limited" in c[2]
         for c in linear.calls
     )
+
+
+# ------------------------------------------------------------------ REA-100
+
+def test_is_pid_alive_returns_false_for_dead_pid():
+    """_is_pid_alive returns False for a PID that definitely doesn't exist."""
+    # Use a very high PID that almost certainly doesn't exist.
+    assert SelfHealer._is_pid_alive(999999) is False
+
+
+def test_is_pid_alive_returns_true_for_current_process():
+    """_is_pid_alive returns True for the current process PID."""
+    assert SelfHealer._is_pid_alive(os.getpid()) is True
+
+
+def test_kill_agent_pid_returns_false_for_dead_pid():
+    """_kill_agent_pid returns False when the PID doesn't exist."""
+    assert SelfHealer._kill_agent_pid(999999) is False
+
+
+def test_check_stuck_passes_skips_when_agent_pid_alive(tmp_path):
+    """AC-1: a pass with an alive agent PID and within timeout is NOT stuck."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "30m"\n')
+    wt = create_worktree(config, "build")
+    write_state(wt, {
+        "role": "build", "issue_id": "REA-1", "issue_title": "T",
+        "branch": "rea-1-t", "worktree_path": wt, "started_at": 1.0,
+        "description": "",
+        "agent_pid": os.getpid(),
+        "agent_started_at": time.time(),
+    })
+
+    linear = FakeLinearPlugin()
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.check_stuck_passes()
+    assert events == []
+    assert os.path.isfile(os.path.join(wt, ".loop.pass.json"))
+
+
+def test_check_stuck_passes_recovers_when_agent_pid_dead(tmp_path):
+    """AC-3: a pass with a dead agent PID is recovered immediately (orphan)."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "30m"\n')
+    wt = create_worktree(config, "build")
+    write_state(wt, {
+        "role": "build", "issue_id": "REA-3", "issue_title": "T",
+        "branch": "rea-3-t", "worktree_path": wt, "started_at": 1.0,
+        "description": "",
+        "agent_pid": 999999,  # definitely dead
+        "agent_started_at": time.time() - 10,  # only 10s old, well within timeout
+    })
+
+    linear = FakeLinearPlugin()
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.check_stuck_passes()
+
+    assert len(events) == 1
+    assert isinstance(events[0], RecoveryEvent)
+    assert events[0].issue_id == "REA-3"
+    assert not os.path.isfile(os.path.join(wt, ".loop.pass.json"))
+    # Verify AgentDied was emitted.
+    assert any(isinstance(e, AgentDied) for e in manager.emitted)
+
+
+def test_check_stuck_passes_kills_agent_when_past_timeout(tmp_path):
+    """AC-4: a pass with an alive agent PID past timeout gets the agent killed."""
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "1s"\n')
+    wt = create_worktree(config, "build")
+
+    # Use a child process PID that can be safely killed without affecting
+    # the test runner. We spawn a sleep process that will outlive the
+    # timeout check, then the daemon kills it.
+    import subprocess
+    child = subprocess.Popen(["sleep", "60"])
+    child_pid = child.pid
+
+    write_state(wt, {
+        "role": "build", "issue_id": "REA-4", "issue_title": "T",
+        "branch": "rea-4-t", "worktree_path": wt, "started_at": 1.0,
+        "description": "",
+        "agent_pid": child_pid,
+        "agent_started_at": time.time() - 3600,  # 1 hour old, far past 1s timeout
+    })
+
+    linear = FakeLinearPlugin()
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.check_stuck_passes()
+
+    # Clean up the child (it should already be dead from the kill signal).
+    try:
+        child.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
+    assert len(events) == 1
+    assert isinstance(events[0], RecoveryEvent)
+    assert not os.path.isfile(os.path.join(wt, ".loop.pass.json"))
+    # Verify AgentKilled was emitted.
+    assert any(isinstance(e, AgentKilled) for e in manager.emitted)

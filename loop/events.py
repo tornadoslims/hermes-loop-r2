@@ -189,6 +189,32 @@ class UpdateAvailable:
     timestamp: datetime
 
 
+@dataclass
+class AgentDied:
+    """REA-100 AC-3: the daemon detected its child agent process died
+    unexpectedly (SIGTERM, OOM, iteration limit). The issue is
+    automatically re-queued on the next tick."""
+
+    role: str
+    issue_id: str
+    reason: str
+    pid: int
+    timestamp: datetime
+
+
+@dataclass
+class AgentKilled:
+    """REA-100 AC-4: the daemon killed a stuck agent process that
+    exceeded pass_timeout with no commit activity."""
+
+    role: str
+    issue_id: str
+    pid: int
+    age_s: float
+    timeout_s: float
+    timestamp: datetime
+
+
 ALL_EVENT_TYPES: tuple = (
     PassStarted,
     PassCompleted,
@@ -210,6 +236,8 @@ ALL_EVENT_TYPES: tuple = (
     WatcherCommitDetected,
     WatcherTickTriggered,
     UpdateAvailable,
+    AgentDied,
+    AgentKilled,
 )
 
 

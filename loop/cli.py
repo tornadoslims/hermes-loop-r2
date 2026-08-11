@@ -160,10 +160,21 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
     On idle (no ready issues), this is a no-op — the tick function
     still emits PassCompleted. On agent timeout/crash, the issue is
     aborted and recycled (AC-7).
+
+    REA-100 AC-2: if the build worktree already has a state file from a
+    previous interrupted pass, resume it instead of claiming a new issue.
+    The agent re-reads the contract and continues from the working tree
+    state. The daemon's PID is recorded in the state file so
+    check_stuck_passes() can detect orphans (AC-3) and enforce timeouts
+    (AC-4).
     """
     from loop.pass_engine import (
         PassEngineError,
         start_build,
+        resume_build,
+        has_existing_build_state,
+        update_agent_pid,
+        clear_agent_pid,
         pass_end,
         worktree_path as _wtp,
         read_state as _rs,
@@ -174,19 +185,26 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
         Issue as AgentIssue,
     )
 
+    # REA-100 AC-2: check for an existing state file (interrupted pass).
+    # If one exists, resume it instead of claiming a new issue.
     try:
-        event = start_build(healer.config, manager)
+        if has_existing_build_state(healer.config):
+            event = resume_build(healer.config, manager)
+            print(f"[pass_engine] resuming build for {event.issue} (state file exists)",
+                  flush=True)
+        else:
+            event = start_build(healer.config, manager)
     except PassEngineError as e:
         print(f"[pass_engine] start_build failed: {e}", flush=True)
         return
 
-    if event.action == "idle":
+    if event.action in ("idle",):
         return  # nothing claimed — no-op, let the tick function emit PassCompleted
 
     issue_id = event.issue or ""
     worktree = _wtp(healer.config, "build")
 
-    # Read the state file that start_build() wrote.
+    # Read the state file that start_build()/resume_build() wrote.
     try:
         st = _rs(worktree)
         state_issue_id = st.get("issue_id", issue_id)
@@ -212,10 +230,15 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
     runner = get_runner()
     timeout_s = _agent_timeout_s(healer.config)
 
+    # REA-100 AC-3: record the daemon's PID in the state file before
+    # invoking the agent so check_stuck_passes() can detect orphans.
+    update_agent_pid(worktree, os.getpid())
+
     try:
         result = runner.run_build(worktree, agent_issue, on_event, timeout_s)
     except (AgentTimeoutError, AgentCrashed) as e:
         print(f"[agent:{state_issue_id}] {e}", flush=True)
+        clear_agent_pid(worktree)
         # AC-7: abort — unassign the issue and recycle to the queue.
         _abort_build_pass(healer, manager, worktree, state_issue_id, str(e))
         return
@@ -223,6 +246,7 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
     # AC-7: only ship if the agent reports verify_passed.
     if not result.verify_passed:
         print(f"[agent:{state_issue_id}] verify failed, aborting", flush=True)
+        clear_agent_pid(worktree)
         _abort_build_pass(healer, manager, worktree, state_issue_id,
                           "agent reported verify_failed")
         return
@@ -232,6 +256,11 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
         pass_end("build", manager=manager, config=healer.config,
                  worktree=worktree)
     except PassEngineError as e:
+        # REA-100: pass_end may have preserved the state file on failure
+        # (e.g. PR creation failed). Clear agent PID so the daemon doesn't
+        # think an agent is still running, but leave the state file so the
+        # next tick can retry.
+        clear_agent_pid(worktree)
         print(f"[pass_engine] ship failed: {e}", flush=True)
         return
 

@@ -65,7 +65,7 @@ class PassEngineEvent:
     "idle" action (AC-7: nothing to do)."""
 
     role: str
-    action: str  # "idle" | "claimed" | "checking_out" | "submitted" | "verdict"
+    action: str  # "idle" | "claimed" | "checking_out" | "submitted" | "verdict" | "resuming"
     timestamp: float
     phase: Optional[str] = None
     issue: Optional[str] = None
@@ -221,6 +221,59 @@ def delete_state(worktree: str) -> None:
     path = _state_path(worktree)
     if os.path.isfile(path):
         os.remove(path)
+
+
+# ---------------------------------------------------- REA-100 agent PID tracking
+
+def update_agent_pid(worktree: str, pid: int) -> Dict[str, Any]:
+    """Record the agent subprocess PID (and started_at timestamp) in the
+    pass state file so the daemon can detect orphaned processes (AC-3)
+    and enforce timeouts (AC-4). Returns the updated state dict."""
+    state = read_state(worktree)
+    state["agent_pid"] = pid
+    state["agent_started_at"] = time.time()
+    write_state(worktree, state)
+    return state
+
+
+def clear_agent_pid(worktree: str) -> None:
+    """Remove the agent PID from the state file when the agent exits
+    cleanly (succeeded or caught error). Prevents a dead PID from
+    looking like an orphan on the next tick."""
+    state_path = _state_path(worktree)
+    if not os.path.isfile(state_path):
+        return
+    state = read_state(worktree)
+    state.pop("agent_pid", None)
+    state.pop("agent_started_at", None)
+    write_state(worktree, state)
+
+
+# ------------------------------------------------------- REA-100 resumable passes
+
+def resume_build(config: Config, manager: PluginManager) -> PassEngineEvent:
+    """Resume an interrupted build pass (AC-2). Instead of claiming a new
+    issue, reads the existing state file in the worktree and returns the
+    issue contract so the agent can re-read it and continue from the
+    working tree state. The worktree's dirty state is preserved -- the
+    agent picks up where the previous invocation left off.
+
+    NG-2: this does NOT resume from an arbitrary tool-call position. It
+    re-reads the contract and continues from the working tree state.
+    """
+    wt = worktree_path(config, "build")
+    state = read_state(wt)
+    issue_id = state.get("issue_id", "")
+    branch = state.get("branch", "")
+    return PassEngineEvent(role="build", action="resuming", phase="resuming",
+                            issue=issue_id, branch=branch, timestamp=time.time())
+
+
+def has_existing_build_state(config: Config) -> bool:
+    """Check if the build worktree has an existing (unconsumed) state file
+    -- meaning a previous pass was interrupted and can be resumed (AC-2)."""
+    wt = worktree_path(config, "build")
+    return os.path.isfile(_state_path(wt))
 
 
 # ------------------------------------------------------------ build role
