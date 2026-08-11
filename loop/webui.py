@@ -40,6 +40,7 @@ def _guess_mime(path: str) -> str:
 
 def _make_handler(
     health_provider: Optional[HealthProvider],
+    metrics_provider: Optional[Callable[[], bytes]],
     static_dir: str,
     templates_dir: str,
 ):
@@ -48,6 +49,11 @@ def _make_handler(
             # /health — machine-readable JSON (unchanged from REA-89)
             if self.path == "/health" and health_provider is not None:
                 self._respond_json(health_provider())
+                return
+
+            # /metrics — Prometheus exposition format (REA-127)
+            if self.path == "/metrics" and metrics_provider is not None:
+                self._respond_plain(metrics_provider(), "text/plain; version=0.0.4")
                 return
 
             # /static/* — serve static assets
@@ -73,6 +79,13 @@ def _make_handler(
             body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _respond_plain(self, body: bytes, content_type: str = "text/plain") -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -142,11 +155,13 @@ class WebUIServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         health_provider: Optional[HealthProvider] = None,
+        metrics_provider: Optional[Callable[[], bytes]] = None,
         project_root: Optional[str] = None,
     ):
         self.host = host
         self.port = port
         self.health_provider = health_provider
+        self.metrics_provider = metrics_provider
         self._project_root = project_root or os.getcwd()
         self._httpd: Optional[http.server.HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -161,7 +176,7 @@ class WebUIServer:
 
     def start(self) -> None:
         handler = _make_handler(
-            self.health_provider, self.static_dir, self.templates_dir
+            self.health_provider, self.metrics_provider, self.static_dir, self.templates_dir
         )
         self._httpd = http.server.HTTPServer((self.host, self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
