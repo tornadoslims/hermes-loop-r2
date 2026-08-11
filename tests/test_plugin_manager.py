@@ -119,3 +119,55 @@ def test_config_config_passed_to_init(tmp_path):
     manager = PluginManager(config)
     manager.load_and_start_all()
     assert manager.plugins[0].instance.calls[0] == ("init", {"foo": "bar"})
+
+
+EVENT_PLUGIN = textwrap.dedent(
+    """
+    from loop.plugins.base import Plugin
+
+    class EventPlugin(Plugin):
+        def __init__(self):
+            self.events = []
+
+        def init(self, config):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def status(self):
+            return {"event_count": len(self.events)}
+
+        def on_event(self, event):
+            self.events.append(event)
+    """
+)
+
+
+def test_notify_forwards_events_to_plugins_with_on_event(tmp_path):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "event.py").write_text(EVENT_PLUGIN)
+    config = _make_config(tmp_path, plugin_dir, ["event"])
+    manager = PluginManager(config)
+    manager.load_and_start_all()
+
+    sentinel = object()
+    manager.notify(sentinel)
+
+    assert manager.plugins[0].instance.events == [sentinel]
+
+
+def test_notify_ignores_plugins_without_on_event(tmp_path):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "good.py").write_text(GOOD_PLUGIN)
+    config = _make_config(tmp_path, plugin_dir, ["good"])
+    manager = PluginManager(config)
+    manager.load_and_start_all()
+
+    # Must not raise even though GoodPlugin has no on_event method.
+    manager.notify(object())

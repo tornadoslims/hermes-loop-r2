@@ -9,6 +9,7 @@ import time
 from loop import __version__
 from loop.config import Config, ConfigError, load_config
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
+from loop.scheduler import PassEvent, Scheduler, SchedulerConfigError, parse_duration, parse_schedule_override
 from loop.webui import WebUIServer
 
 
@@ -20,6 +21,21 @@ def _load_config_or_die(config_path):
         raise SystemExit(1)
 
 
+def _resolve_schedule(config: Config, override: str | None):
+    """Combine loop.toml's [pipeline] section with an optional
+    --schedule CLI override (override wins per-role) and parse both
+    into a role -> seconds dict."""
+    raw = {"build": config.pipeline.schedule_build, "review": config.pipeline.schedule_review}
+    if override:
+        raw.update(parse_schedule_override(override))
+    return {role: parse_duration(value) for role, value in raw.items()}
+
+
+def _default_tick_fn(role: str) -> None:
+    """Placeholder tick body: the scheduler only fires ticks (NG-1). The
+    real build/review pass engine is wired in here by a later issue."""
+
+
 def cmd_serve(args) -> int:
     config: Config = _load_config_or_die(args.config)
     manager = PluginManager(config)
@@ -29,13 +45,24 @@ def cmd_serve(args) -> int:
         print(json.dumps({"error": f"plugin startup failed: {e}"}), file=sys.stderr)
         return 1
 
+    try:
+        schedule = _resolve_schedule(config, args.schedule)
+    except SchedulerConfigError as e:
+        print(json.dumps({"error": f"invalid schedule: {e}"}), file=sys.stderr)
+        manager.stop_all()
+        return 1
+
+    scheduler = Scheduler(schedule=schedule, tick_fn=_default_tick_fn, notify=manager.notify)
+    scheduler.start()
+
     webui = WebUIServer(host=args.host, port=args.port)
     webui.start()
     print(json.dumps({
         "status": "serving",
         "webui_url": webui.url,
         "plugins": [lp.name for lp in manager.plugins],
-    }))
+        "schedule": {role: f"{seconds:.0f}s" for role, seconds in schedule.items()},
+    }), flush=True)
 
     try:
         while True:
@@ -43,6 +70,7 @@ def cmd_serve(args) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        scheduler.stop()
         manager.stop_all()
         webui.stop()
     return 0
@@ -80,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("serve", help="start the daemon: web UI + plugin lifecycle")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument(
+        "--schedule",
+        default=None,
+        help='override loop.toml\'s [pipeline] schedule for testing, e.g. "build=10s,review=10s"',
+    )
     p.set_defaults(func=cmd_serve)
 
     plugin = sub.add_parser("plugin", help="plugin management")

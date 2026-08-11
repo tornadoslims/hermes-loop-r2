@@ -15,6 +15,12 @@ this is compatible with) with a [plugins] section:
     team_key = "REA"                # arbitrary plugin-specific config,
                                      # passed verbatim to init()
 
+    [pipeline]
+    schedule_build = "5m"           # how often to run a build pass
+    schedule_review = "5m"          # how often to run a review pass
+                                     # (Go-style duration strings: "30s",
+                                     # "5m", "1h" -- see loop/scheduler.py)
+
 All paths in the returned Config are resolved to absolute paths so
 callers never need to know where loop.toml itself lives.
 """
@@ -43,11 +49,18 @@ class PluginsConfig:
 
 
 @dataclass
+class PipelineConfig:
+    schedule_build: str = "5m"
+    schedule_review: str = "5m"
+
+
+@dataclass
 class Config:
     path: str
     raw: Dict[str, Any]
     root: str
     plugins: PluginsConfig
+    pipeline: PipelineConfig
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
         """Plugin-specific config block for `name`, or {} if none set."""
@@ -100,4 +113,10 @@ def load_config(path: str | None = None) -> Config:
 
     plugins = PluginsConfig(dir=plugin_dir, enabled=list(enabled), config=dict(plugin_config))
 
-    return Config(path=toml_path, raw=raw, root=root, plugins=plugins)
+    pipeline_raw = raw.get("pipeline", {}) or {}
+    pipeline = PipelineConfig(
+        schedule_build=pipeline_raw.get("schedule_build", "5m"),
+        schedule_review=pipeline_raw.get("schedule_review", "5m"),
+    )
+
+    return Config(path=toml_path, raw=raw, root=root, plugins=plugins, pipeline=pipeline)
