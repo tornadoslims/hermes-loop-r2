@@ -153,6 +153,62 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_watchdog(args) -> int:
+    """REA-119: standalone, pass-engine-independent staleness check.
+
+    Per the issue's resolved scope decision (option (a) -- see the
+    REA-119 Linear comment thread): r2 has no pass engine yet
+    (`_make_tick_fn`'s build/review work is still a no-op), so there is
+    nothing to attach per-issue crash-count or fabricated-commit
+    detection to. What *can* ship now is the generic, pass-engine-free
+    half of the ask -- "alert when a target repo has had zero new
+    commits for >stall_timeout despite continuous ready work" -- reusing
+    `SelfHealer.check_stall()` (REA-89 AC-2) exactly as-is, run as a
+    single one-shot check instead of inside `loop serve`'s scheduler
+    loop. This lets an external cron invoke `loop watchdog` on its own
+    cadence (e.g. hourly) without a `loop serve` daemon having to be
+    running at all, which matters while the pass engine doesn't exist to
+    keep one alive.
+
+    Per-issue crash/fabrication tracking (the rest of REA-119's ask) is
+    explicitly deferred to whichever future issue implements the real
+    build/review pass engine (REA-87) -- there is no pass execution
+    state anywhere in r2 yet for a crash counter to observe.
+
+    Exit code is 0 when no stall is detected, 2 when `check_stall()`
+    reports one (so cron/alerting can distinguish "nothing to see" from
+    "the repo is stalled" without parsing output), and 1 on a hard
+    error loading config or plugins.
+    """
+    config = _load_config_or_die(args.config)
+    manager = PluginManager(config)
+    try:
+        manager.load_and_start_all()
+    except (PluginLoadError, PluginInterfaceError) as e:
+        print(json.dumps({"error": f"plugin startup failed: {e}"}), file=sys.stderr)
+        return 1
+
+    try:
+        healer = SelfHealer(config, manager)
+        # scheduler=None: this is a one-shot check, not a running
+        # scheduler tick, so there is no scheduled build tick to force.
+        event = healer.check_stall(scheduler=None)
+    finally:
+        manager.stop_all()
+
+    if event is None:
+        print(json.dumps({"stalled": False}), flush=True)
+        return 0
+
+    print(json.dumps({
+        "stalled": True,
+        "kind": event.kind,
+        "detail": event.detail,
+        "timestamp": event.timestamp.isoformat(),
+    }), flush=True)
+    return 2
+
+
 def cmd_plugin_list(args) -> int:
     config = _load_config_or_die(args.config)
     manager = PluginManager(config)
@@ -203,6 +259,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("version", help="print the hermes-loop-r2 version")
     p.set_defaults(func=cmd_version)
+
+    p = sub.add_parser(
+        "watchdog",
+        help="one-shot staleness check (REA-119): alert if the target repo "
+             "has had no commits within pipeline.stall_timeout despite "
+             "ready work in the queue. Exit 2 if stalled, 0 if not.",
+    )
+    p.set_defaults(func=cmd_watchdog)
 
     return parser
 
