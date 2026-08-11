@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issues — hermes-loop-r2</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+  <nav id="topnav">
+    <a class="nav-brand" href="dashboard.html">
+      <span class="dot"></span> hermes-loop-r2
+    </a>
+    <ul class="nav-links">
+      <li><a href="dashboard.html">Dashboard</a></li>
+      <li><a href="issues.html">Issues</a></li>
+      <li><a href="passes.html">Passes</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+    </ul>
+    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
+  </nav>
+
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <a class="sidebar-link" href="dashboard.html">
+          <span class="icon">&#9673;</span> Dashboard
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Work</div>
+        <a class="sidebar-link" href="issues.html">
+          <span class="icon">&#9634;</span> Issues
+          <span class="sidebar-badge">4</span>
+        </a>
+        <a class="sidebar-link" href="passes.html">
+          <span class="icon">&#9654;</span> Passes
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <a class="sidebar-link" href="plugins.html">
+          <span class="icon">&#9881;</span> Plugins
+        </a>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Issues</h1>
+        <p>Agent-ready issues queued for the build pipeline.</p>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th><th>Assigned</th></tr></thead>
+          <tbody id="issue-list">
+            <tr><td><code>REA-98</code></td><td>Web UI skeleton — static HTML/CSS dark theme scaffold</td><td><span class="badge badge--purple">High</span></td><td><span class="badge badge--blue">In Progress</span></td><td>build</td></tr>
+            <tr><td><code>REA-97</code></td><td>Add Linear event integration (REA-128 follow-up)</td><td><span class="badge badge--green">Medium</span></td><td><span class="badge badge--yellow">In Review</span></td><td>review</td></tr>
+            <tr><td><code>REA-99</code></td><td>Plugin config editor with JSON schema validation</td><td><span class="badge badge--green">Medium</span></td><td><span class="badge badge--blue">Ready</span></td><td>—</td></tr>
+            <tr><td><code>REA-100</code></td><td>Pass controls: pause/resume pipeline stages</td><td><span class="badge badge--red">Low</span></td><td><span class="badge badge--blue">Ready</span></td><td>—</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="static/app.js"></script>
+</body>
+</html>

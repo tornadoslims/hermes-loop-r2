@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard — hermes-loop-r2</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+  <nav id="topnav">
+    <a class="nav-brand" href="dashboard.html">
+      <span class="dot"></span> hermes-loop-r2
+    </a>
+    <ul class="nav-links">
+      <li><a href="dashboard.html">Dashboard</a></li>
+      <li><a href="issues.html">Issues</a></li>
+      <li><a href="passes.html">Passes</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+    </ul>
+    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
+  </nav>
+
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <a class="sidebar-link" href="dashboard.html">
+          <span class="icon">&#9673;</span> Dashboard
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Work</div>
+        <a class="sidebar-link" href="issues.html">
+          <span class="icon">&#9634;</span> Issues
+          <span class="sidebar-badge">4</span>
+        </a>
+        <a class="sidebar-link" href="passes.html">
+          <span class="icon">&#9654;</span> Passes
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <a class="sidebar-link" href="plugins.html">
+          <span class="icon">&#9881;</span> Plugins
+        </a>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <p>Live daemon overview and pipeline metrics.</p>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Daemon</div>
+          <div class="stat-value">
+            <span class="indicator indicator--alive"></span> Alive
+          </div>
+          <div class="stat-sub" id="daemon-version">v0.7.2</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Queue Depth</div>
+          <div class="stat-value" id="queue-depth">3</div>
+          <div class="stat-sub">pending builds</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Today's Passes</div>
+          <div class="stat-value" id="passes-today">12</div>
+          <div class="stat-sub">8 shipped, 2 blocked, 2 idle</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Pipeline Health</div>
+          <div class="stat-value" style="color: var(--accent-green);">&#10003;</div>
+          <div class="stat-sub">all stages passing</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Recent Passes</h2></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Time</th><th>Pass</th><th>Role</th><th>Issue</th><th>Outcome</th></tr></thead>
+          <tbody id="recent-passes">
+            <tr><td>14:52 UTC</td><td><code>#117</code></td><td>build</td><td><code>REA-97</code></td><td><span class="badge badge--green">shipped</span></td></tr>
+            <tr><td>14:51 UTC</td><td><code>#116</code></td><td>review</td><td><code>REA-96</code></td><td><span class="badge badge--green">approved</span></td></tr>
+            <tr><td>14:46 UTC</td><td><code>#115</code></td><td>build</td><td><code>REA-95</code></td><td><span class="badge badge--green">shipped</span></td></tr>
+            <tr><td>14:40 UTC</td><td><code>#114</code></td><td>review</td><td><code>REA-94</code></td><td><span class="badge badge--red">changes-requested</span></td></tr>
+            <tr><td>14:35 UTC</td><td><code>#113</code></td><td>build</td><td><code>REA-93</code></td><td><span class="badge badge--green">shipped</span></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Pipeline Stages</h2></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Stage</th><th>Status</th><th>Last Run</th></tr></thead>
+          <tbody id="pipeline-stages">
+            <tr><td><code>loop-spec</code></td><td><span class="badge badge--green">ready</span></td><td>2 min ago</td></tr>
+            <tr><td><code>loop-build</code></td><td><span class="badge badge--blue">running</span></td><td>now</td></tr>
+            <tr><td><code>loop-review</code></td><td><span class="badge badge--green">ready</span></td><td>1 min ago</td></tr>
+            <tr><td><code>loop-automerge</code></td><td><span class="badge badge--yellow">waiting</span></td><td>4 min ago</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Passes — hermes-loop-r2</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+  <nav id="topnav">
+    <a class="nav-brand" href="dashboard.html">
+      <span class="dot"></span> hermes-loop-r2
+    </a>
+    <ul class="nav-links">
+      <li><a href="dashboard.html">Dashboard</a></li>
+      <li><a href="issues.html">Issues</a></li>
+      <li><a href="passes.html">Passes</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+    </ul>
+    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
+  </nav>
+
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <a class="sidebar-link" href="dashboard.html">
+          <span class="icon">&#9673;</span> Dashboard
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Work</div>
+        <a class="sidebar-link" href="issues.html">
+          <span class="icon">&#9634;</span> Issues
+          <span class="sidebar-badge">4</span>
+        </a>
+        <a class="sidebar-link" href="passes.html">
+          <span class="icon">&#9654;</span> Passes
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <a class="sidebar-link" href="plugins.html">
+          <span class="icon">&#9881;</span> Plugins
+        </a>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Passes</h1>
+        <p>Build, review, and automerge pass history.</p>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Role</th><th>Issue</th><th>Outcome</th><th>Duration</th><th>Time</th></tr></thead>
+          <tbody id="pass-history">
+            <tr><td><code>#117</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-97</code></td><td><span class="badge badge--green">shipped</span></td><td>2 min</td><td>14:52 UTC</td></tr>
+            <tr><td><code>#116</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-96</code></td><td><span class="badge badge--green">approved</span></td><td>1 min</td><td>14:51 UTC</td></tr>
+            <tr><td><code>#115</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-95</code></td><td><span class="badge badge--green">shipped</span></td><td>3 min</td><td>14:46 UTC</td></tr>
+            <tr><td><code>#114</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-94</code></td><td><span class="badge badge--red">changes-requested</span></td><td>0 min</td><td>14:40 UTC</td></tr>
+            <tr><td><code>#113</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-93</code></td><td><span class="badge badge--green">shipped</span></td><td>5 min</td><td>14:35 UTC</td></tr>
+            <tr><td><code>#112</code></td><td><span class="badge badge--blue">build</span></td><td><code>REA-92</code></td><td><span class="badge badge--yellow">idle</span></td><td>—</td><td>14:30 UTC</td></tr>
+            <tr><td><code>#111</code></td><td><span class="badge badge--purple">review</span></td><td><code>REA-91</code></td><td><span class="badge badge--green">approved</span></td><td>1 min</td><td>14:25 UTC</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="static/app.js"></script>
+</body>
+</html>

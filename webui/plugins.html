@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plugins — hermes-loop-r2</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+  <nav id="topnav">
+    <a class="nav-brand" href="dashboard.html">
+      <span class="dot"></span> hermes-loop-r2
+    </a>
+    <ul class="nav-links">
+      <li><a href="dashboard.html">Dashboard</a></li>
+      <li><a href="issues.html">Issues</a></li>
+      <li><a href="passes.html">Passes</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+    </ul>
+    <button id="menu-toggle" aria-label="Menu">&#9776;</button>
+  </nav>
+
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <a class="sidebar-link" href="dashboard.html">
+          <span class="icon">&#9673;</span> Dashboard
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Work</div>
+        <a class="sidebar-link" href="issues.html">
+          <span class="icon">&#9634;</span> Issues
+          <span class="sidebar-badge">4</span>
+        </a>
+        <a class="sidebar-link" href="passes.html">
+          <span class="icon">&#9654;</span> Passes
+        </a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <a class="sidebar-link" href="plugins.html">
+          <span class="icon">&#9881;</span> Plugins
+        </a>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Plugins</h1>
+        <p>Installed pipeline plugins and their configuration status.</p>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Plugin</th><th>Version</th><th>Stage</th><th>Status</th><th>Enabled</th></tr></thead>
+          <tbody id="plugin-list">
+            <tr>
+              <td><code>loop-build</code></td><td>0.7.2</td>
+              <td><span class="badge badge--blue">build</span></td>
+              <td><span class="badge badge--green">active</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><code>loop-review</code></td><td>0.7.2</td>
+              <td><span class="badge badge--purple">review</span></td>
+              <td><span class="badge badge--green">active</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><code>loop-automerge</code></td><td>0.7.2</td>
+              <td><span class="badge badge--yellow">automerge</span></td>
+              <td><span class="badge badge--green">active</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><code>loop-spec</code></td><td>0.7.0</td>
+              <td><span class="badge badge--green">spec</span></td>
+              <td><span class="badge badge--green">active</span></td>
+              <td><label class="toggle"><input type="checkbox" checked><span class="slider"></span></label></td>
+            </tr>
+            <tr>
+              <td><code>loop-sync</code></td><td>0.7.1</td>
+              <td><span class="badge badge--blue">sync</span></td>
+              <td><span class="badge badge--yellow">paused</span></td>
+              <td><label class="toggle"><input type="checkbox"><span class="slider"></span></label></td>
+            </tr>
+          </tbody>
+        </table></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="static/app.js"></script>
+</body>
+</html>
