@@ -20,6 +20,16 @@ this is compatible with) with a [plugins] section:
     schedule_review = "5m"          # how often to run a review pass
                                      # (Go-style duration strings: "30s",
                                      # "5m", "1h" -- see loop/scheduler.py)
+    pass_timeout = "30m"            # (REA-89 AC-1/AC-8) a pass whose
+                                     # .loop.pass.json is older than this
+                                     # is considered stuck and auto-recovered
+    stall_timeout = "30m"           # (REA-89 AC-2/AC-8) no commits to the
+                                     # target repo within this window, with
+                                     # a non-empty ready queue, forces an
+                                     # immediate build tick
+    queue_warn_ticks = 3             # (REA-89 AC-3/AC-8) consecutive empty
+                                     # -queue build ticks before a
+                                     # QueueEmpty event is emitted
 
     [events]
     log_file = "events.jsonl"       # path to append JSON lines of every
@@ -60,6 +70,9 @@ class PluginsConfig:
 class PipelineConfig:
     schedule_build: str = "5m"
     schedule_review: str = "5m"
+    pass_timeout: str = "30m"
+    stall_timeout: str = "30m"
+    queue_warn_ticks: int = 3
 
 
 @dataclass
@@ -131,6 +144,9 @@ def load_config(path: str | None = None) -> Config:
     pipeline = PipelineConfig(
         schedule_build=pipeline_raw.get("schedule_build", "5m"),
         schedule_review=pipeline_raw.get("schedule_review", "5m"),
+        pass_timeout=pipeline_raw.get("pass_timeout", "30m"),
+        stall_timeout=pipeline_raw.get("stall_timeout", "30m"),
+        queue_warn_ticks=int(pipeline_raw.get("queue_warn_ticks", 3)),
     )
 
     events_raw = raw.get("events", {}) or {}

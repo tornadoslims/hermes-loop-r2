@@ -372,6 +372,46 @@ class LinearPlugin(Plugin):
     def get_issue(self, issue_id: str) -> dict:
         return self._resolve_issue(issue_id)
 
+    def list_open(self) -> List[dict]:
+        """REA-89 AC-6: every non-terminal issue on the team, regardless
+        of assignment or labels. `list_ready()` is a narrow filter
+        (agent-ready + unassigned + not blocked); this is the broad one
+        the self-healer uses to tell "queue truly empty" apart from
+        "queue has issues but none are ready/claimable" (e.g. a
+        mislabeled issue missing `agent-ready`)."""
+        team = self._resolve_team()
+        data = _gql(
+            self._require_api_key(),
+            """
+            query($teamId: ID!) {
+              issues(filter: {
+                team: { id: { eq: $teamId } }
+                state: { type: { nin: ["completed", "canceled"] } }
+              }, first: 100) {
+                nodes { id identifier title url state { name } labels { nodes { name } } }
+              }
+            }
+            """,
+            {"teamId": team["id"]},
+        )
+        return data["issues"]["nodes"]
+
+    def unassign_issue(self, issue_id: str) -> dict:
+        """REA-89 AC-1: clears the assignee, used by the daemon's
+        self-healer to re-queue an issue whose pass got stuck."""
+        api_key = self._require_api_key()
+        issue = self._resolve_issue(issue_id)
+        data = _gql(
+            api_key,
+            """
+            mutation($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) { success issue { id identifier assignee { name } } }
+            }
+            """,
+            {"id": issue["id"], "input": {"assigneeId": None}},
+        )
+        return data["issueUpdate"]["issue"]
+
     def add_label(self, issue_id: str, name: str) -> dict:
         api_key = self._require_api_key()
         team = self._resolve_team(include_labels=True)

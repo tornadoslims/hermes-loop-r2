@@ -125,6 +125,30 @@ class QueueStalled:
 
 
 @dataclass
+class RecoveryEvent:
+    """REA-89 AC-1/AC-7: a stuck pass (stale .loop.pass.json) was
+    auto-recovered -- worktree reset, issue unclaimed and re-queued."""
+
+    role: str
+    issue_id: str
+    reason: str
+    timestamp: datetime
+
+
+@dataclass
+class StallEvent:
+    """REA-89 AC-2/AC-6/AC-7: something about the pipeline's forward
+    progress looks anomalous -- either no commits landed within
+    stall_timeout while the queue has ready work (kind="idle_repo"), or
+    N consecutive build ticks came back "idle" despite a non-empty
+    queue (kind="stale_ready", AC-6 mislabeled-issue detection)."""
+
+    kind: str
+    detail: str
+    timestamp: datetime
+
+
+@dataclass
 class DaemonStarted:
     version: str
     plugins: List[str]
@@ -151,6 +175,8 @@ ALL_EVENT_TYPES: tuple = (
     PluginRecovered,
     QueueEmpty,
     QueueStalled,
+    RecoveryEvent,
+    StallEvent,
     DaemonStarted,
     DaemonStopping,
 )
