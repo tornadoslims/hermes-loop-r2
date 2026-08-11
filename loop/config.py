@@ -81,13 +81,21 @@ class EventsConfig:
 
 
 @dataclass
+class WatcherConfig:
+    enabled: bool = False
+    poll_interval: str = "15s"
+
+
+@dataclass
 class Config:
     path: str
     raw: Dict[str, Any]
     root: str
+    target_repo_path: str
     plugins: PluginsConfig
     pipeline: PipelineConfig
     events: EventsConfig
+    watcher: WatcherConfig
 
     def plugin_config(self, name: str) -> Dict[str, Any]:
         """Plugin-specific config block for `name`, or {} if none set."""
@@ -155,4 +163,16 @@ def load_config(path: str | None = None) -> Config:
         log_file = os.path.normpath(os.path.join(root, log_file))
     events = EventsConfig(log_file=log_file)
 
-    return Config(path=toml_path, raw=raw, root=root, plugins=plugins, pipeline=pipeline, events=events)
+    watcher_raw = raw.get("watcher", {}) or {}
+    watcher = WatcherConfig(
+        enabled=bool(watcher_raw.get("enabled", False)),
+        poll_interval=str(watcher_raw.get("poll_interval", "15s")),
+    )
+
+    target_raw = raw.get("target", {}) or {}
+    target_repo_path = os.path.abspath(target_raw.get("path", root))
+
+    return Config(
+        path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
+        plugins=plugins, pipeline=pipeline, events=events, watcher=watcher,
+    )
