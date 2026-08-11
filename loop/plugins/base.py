@@ -53,3 +53,10 @@ class Plugin(abc.ABC):
         """Return a JSON-serializable dict describing the plugin's
         current state, e.g. {"name": "linear", "status": "loaded"}."""
         raise NotImplementedError
+
+    def validate(self) -> bool:
+        """Optional self-check. Plugins may override this to verify
+        connectivity, credentials, or other runtime prerequisites.
+        Called by `loop plugin validate <name>`; the CLI exits non-zero
+        when this returns False."""
+        return True
