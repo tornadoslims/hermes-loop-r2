@@ -5,13 +5,22 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from loop.config import load_config
 from loop.daemon import SelfHealer
-from loop.events import PluginDegraded, PluginRecovered, QueueEmpty, RecoveryEvent, StallEvent
+from loop.events import (
+    IssueRecycled,
+    IssueUnblocked,
+    PluginDegraded,
+    PluginRecovered,
+    QueueEmpty,
+    QueueStalled,
+    RecoveryEvent,
+    StallEvent,
+)
 from loop.pass_engine import create_worktree, worktree_path, write_state
 
 
@@ -48,6 +57,11 @@ class FakeLinearPlugin:
         self._ready = ready or []
         self._open = open_issues if open_issues is not None else list(self._ready)
         self.calls = []
+        # REA-90: configurable stand-ins for the new plugin surface.
+        self._blocked = []
+        self._in_progress = []
+        self._comments = {}
+        self._deps_met = {}
 
     def status(self):
         return {"started": True}
@@ -71,6 +85,30 @@ class FakeLinearPlugin:
     def add_comment(self, issue_id, body):
         self.calls.append(("add_comment", issue_id, body))
         return {"success": True}
+
+    def list_blocked(self, **kwargs):
+        self.calls.append(("list_blocked", kwargs))
+        return self._blocked
+
+    def get_comments(self, issue_id, limit=5):
+        self.calls.append(("get_comments", issue_id))
+        return self._comments.get(issue_id, [])
+
+    def parse_dependencies(self, body, comments):
+        import re
+        return [m.group(1).upper() for m in re.finditer(r"depends on\s+([A-Za-z]+-\d+)", body or "", re.IGNORECASE)]
+
+    def dependencies_met(self, issue_id):
+        self.calls.append(("dependencies_met", issue_id))
+        return self._deps_met.get(issue_id, False)
+
+    def remove_label(self, issue_id, name):
+        self.calls.append(("remove_label", issue_id, name))
+        return {"id": issue_id}
+
+    def list_in_progress(self):
+        self.calls.append(("list_in_progress",))
+        return self._in_progress
 
 
 class FakeLoadedPlugin:
@@ -396,3 +434,141 @@ def test_snapshot_reports_degraded_plugin(tmp_path):
     snap = healer.snapshot()
     assert snap["plugins"] == {"broken": {"healthy": False, "error": "load failed"}}
     assert snap["queue_depth"] is None
+
+
+# ------------------------------------------------------------------ REA-90 AC-2
+
+def test_auto_unblock_removes_blocked_label_when_dependency_met(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{"identifier": "REA-2", "description": "Depends on REA-1"}]
+    linear._deps_met["REA-2"] = True
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.auto_unblock()
+
+    assert len(events) == 1
+    assert isinstance(events[0], IssueUnblocked)
+    assert events[0].issue_id == "REA-2"
+    assert events[0].previously_blocked_by == ["REA-1"]
+    assert ("remove_label", "REA-2", "blocked") in linear.calls
+    assert ("add_label", "REA-2", "agent-ready") in linear.calls
+
+
+def test_auto_unblock_leaves_issue_blocked_when_dependency_unmet(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{"identifier": "REA-2", "description": "Depends on REA-1"}]
+    linear._deps_met["REA-2"] = False
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.auto_unblock()
+
+    assert events == []
+    assert ("remove_label", "REA-2", "blocked") not in linear.calls
+
+
+def test_auto_unblock_ignores_blocked_issue_with_no_dependency_text(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin()
+    linear._blocked = [{"identifier": "REA-2", "description": "just blocked, no reason parsed"}]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    assert healer.auto_unblock() == []
+
+
+# ------------------------------------------------------------------ REA-90 AC-4
+
+def test_check_queue_drain_emits_after_three_consecutive_ticks(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with_linear(FakeLinearPlugin())
+    healer = SelfHealer(config, manager)
+
+    assert healer.check_queue_drain(0, 1) is None
+    assert healer.check_queue_drain(0, 1) is None
+    event = healer.check_queue_drain(0, 1)
+
+    assert isinstance(event, QueueStalled)
+
+
+def test_check_queue_drain_resets_when_a_ready_issue_appears(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with_linear(FakeLinearPlugin())
+    healer = SelfHealer(config, manager)
+
+    healer.check_queue_drain(0, 1)
+    healer.check_queue_drain(1, 0)  # ready issue resets the streak
+    event = healer.check_queue_drain(0, 1)
+
+    assert event is None
+
+
+def test_check_queue_drain_noop_when_not_exactly_one_blocked(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with_linear(FakeLinearPlugin())
+    healer = SelfHealer(config, manager)
+
+    for _ in range(5):
+        assert healer.check_queue_drain(0, 2) is None
+        assert healer.check_queue_drain(0, 0) is None
+
+
+# ------------------------------------------------------------------ REA-90 AC-5
+
+def test_recycle_stuck_issues_requeues_after_timeout(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "1s"\n')
+    old = (datetime.now().astimezone().replace(microsecond=0) - timedelta(hours=1)).isoformat()
+    linear = FakeLinearPlugin()
+    linear._in_progress = [{"identifier": "REA-9", "updatedAt": old}]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    events = healer.recycle_stuck_issues()
+
+    assert len(events) == 1
+    assert isinstance(events[0], IssueRecycled)
+    assert events[0].attempt == 1
+    assert ("unassign_issue", "REA-9") in linear.calls
+    assert ("add_label", "REA-9", "agent-ready") in linear.calls
+
+
+def test_recycle_stuck_issues_marks_blocked_after_three_attempts(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "1s"\n')
+    old = (datetime.now().astimezone().replace(microsecond=0) - timedelta(hours=1)).isoformat()
+    linear = FakeLinearPlugin()
+    linear._in_progress = [{"identifier": "REA-9", "updatedAt": old}]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    healer.recycle_stuck_issues()
+    healer.recycle_stuck_issues()
+    events = healer.recycle_stuck_issues()
+
+    assert events[0].attempt == 3
+    assert ("add_label", "REA-9", "blocked") in linear.calls
+    # The final attempt marks blocked, not agent-ready.
+    add_label_calls = [c for c in linear.calls if c[0] == "add_label"]
+    assert add_label_calls[-1] == ("add_label", "REA-9", "blocked")
+
+
+def test_recycle_stuck_issues_ignores_fresh_in_progress(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "30m"\n')
+    now = datetime.now().astimezone().isoformat()
+    linear = FakeLinearPlugin()
+    linear._in_progress = [{"identifier": "REA-9", "updatedAt": now}]
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager)
+
+    assert healer.recycle_stuck_issues() == []

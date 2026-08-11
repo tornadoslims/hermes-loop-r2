@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -38,8 +39,33 @@ ISSUE_FIELDS = """
   assignee { id name email }
   labels { nodes { id name } }
   project { id name }
-  createdAt updatedAt
+  createdAt updatedAt priority
 """
+
+# REA-90 AC-6: "Depends on REA-NN" (case-insensitive), scanned out of the
+# issue description plus its most recent comments. Deliberately simple --
+# no graph database, just string matching. See LinearPlugin.parse_dependencies
+# for the override seam a different-format plugin would use instead.
+_DEPENDS_RE = re.compile(r"depends on\s+([A-Za-z]+-\d+)", re.IGNORECASE)
+
+# REA-90 AC-3: `priority:N` label fallback when the Linear priority field
+# itself is unset (0/None).
+_PRIORITY_LABEL_RE = re.compile(r"^priority:([1-5])$", re.IGNORECASE)
+
+
+def _priority_of(issue: Dict[str, Any]) -> int:
+    """REA-90 AC-3: 1 (highest) .. 5 (lowest). Prefers the Linear issue's
+    own `priority` field; falls back to a `priority:N` label; issues with
+    neither sort last (999) rather than first, so an unprioritized issue
+    never jumps the queue ahead of an explicitly prioritized one."""
+    p = issue.get("priority")
+    if isinstance(p, (int, float)) and p > 0:
+        return int(p)
+    for name in {l["name"] for l in issue.get("labels", {}).get("nodes", [])}:
+        m = _PRIORITY_LABEL_RE.match(name)
+        if m:
+            return int(m.group(1))
+    return 999
 
 
 class LinearError(Exception):
@@ -232,7 +258,23 @@ class LinearPlugin(Plugin):
         data = _gql(self._require_api_key(), "query { viewer { id name email } }")
         return data["viewer"]
 
-    def list_ready(self, ready_label: str = "agent-ready", exclude_blocked_label: str = "blocked") -> List[dict]:
+    def list_ready(self, ready_label: str = "agent-ready", exclude_blocked_label: str = "blocked",
+                    log: Optional[Any] = None) -> List[dict]:
+        """`agent-ready`, unassigned, not `blocked` issues -- REA-90 adds
+        two things on top of the REA-85 filter:
+
+        AC-1: an issue with an unmet "Depends on REA-NN" dependency
+        (parsed from its description + latest comments) is skipped, even
+        if it's labeled `agent-ready`, with `log("[queue] skipping "
+        "REA-NN -- waiting on REA-MM")` for each unmet dependency found
+        (log defaults to a no-op so callers that don't care about the
+        message, e.g. existing tests, are unaffected).
+
+        AC-3: the surviving issues are sorted by priority (1 highest..5
+        lowest, `_priority_of()`) then by `createdAt` ascending, so the
+        build pass always claims `ready[0]`.
+        """
+        log = log or (lambda msg: None)
         team = self._resolve_team()
         data = _gql(
             self._require_api_key(),
@@ -242,7 +284,10 @@ class LinearPlugin(Plugin):
                 team: { id: { eq: $teamId } }
                 assignee: { null: true }
               }, first: 100) {
-                nodes { id identifier title url state { name } labels { nodes { name } } }
+                nodes {
+                  id identifier title url state { name type } priority createdAt
+                  description labels { nodes { name } }
+                }
               }
             }
             """,
@@ -250,12 +295,160 @@ class LinearPlugin(Plugin):
         )
         ready_label = ready_label.lower()
         exclude_blocked_label = exclude_blocked_label.lower()
-        out = []
+        candidates = []
         for issue in data["issues"]["nodes"]:
             names = {l["name"].lower() for l in issue["labels"]["nodes"]}
             if ready_label in names and exclude_blocked_label not in names:
+                candidates.append(issue)
+
+        out = []
+        for issue in candidates:
+            unmet = self._unmet_dependencies(issue)
+            if unmet:
+                for dep in unmet:
+                    log(f"[queue] skipping {issue['identifier']} -- waiting on {dep}")
+                continue
+            out.append(issue)
+
+        out.sort(key=lambda i: (_priority_of(i), i.get("createdAt") or ""))
+        return out
+
+    def parse_dependencies(self, issue_body: str, comments: List[str]) -> List[str]:
+        """REA-90 AC-6: extract `Depends on REA-NN` declarations
+        (case-insensitive) from the issue description and its most
+        recent comments. Deliberately simple -- no graph database, just
+        string matching. A plugin with a different dependency format can
+        override this method on its own subclass; `list_ready()` and
+        `_unmet_dependencies()` only ever call it through `self`."""
+        deps: List[str] = []
+        for text in [issue_body or "", *comments]:
+            for m in _DEPENDS_RE.finditer(text):
+                dep = m.group(1).upper()
+                if dep not in deps:
+                    deps.append(dep)
+        return deps
+
+    def get_comments(self, issue_id: str, limit: int = 5) -> List[str]:
+        """Most recent `limit` comment bodies on `issue_id`, newest last
+        -- REA-90 AC-1/AC-6 scan these (plus the description) for
+        dependency declarations."""
+        issue = self._resolve_issue(issue_id)
+        data = _gql(
+            self._require_api_key(),
+            """
+            query($id: String!, $limit: Int!) {
+              issue(id: $id) {
+                comments(first: $limit, orderBy: createdAt) { nodes { body } }
+              }
+            }
+            """,
+            {"id": issue["id"], "limit": limit},
+        )
+        return [c["body"] for c in data["issue"]["comments"]["nodes"]]
+
+    def _unmet_dependencies(self, issue: dict) -> List[str]:
+        """REA-90 AC-1: direct dependencies only (NG-1 -- no transitive
+        traversal). A dependency counts as met once its state type is
+        `completed` or `canceled`. Missing/unresolvable dependency
+        issues are treated as unmet (fail closed -- never claim an issue
+        whose dependency can't be verified)."""
+        try:
+            comments = self.get_comments(issue["identifier"])
+        except LinearError:
+            comments = []
+        deps = self.parse_dependencies(issue.get("description", ""), comments)
+        unmet = []
+        for dep_id in deps:
+            try:
+                dep_issue = self._resolve_issue(dep_id)
+            except LinearError:
+                unmet.append(dep_id)
+                continue
+            state_type = (dep_issue.get("state") or {}).get("type")
+            if state_type not in ("completed", "canceled"):
+                unmet.append(dep_id)
+        return unmet
+
+    def dependencies_met(self, issue_id: str) -> bool:
+        """Public convenience wrapper around `_unmet_dependencies()` for
+        callers (the daemon's auto-unblock scan) that only have an
+        issue identifier, not the full issue dict with description."""
+        issue = self._resolve_issue(issue_id)
+        return not self._unmet_dependencies(issue)
+
+    def list_blocked(self, blocked_label: str = "blocked") -> List[dict]:
+        """REA-90 AC-2: every issue currently labeled `blocked`, for the
+        daemon's auto-unblock scan (run once a dependency issue reaches
+        Done)."""
+        team = self._resolve_team()
+        data = _gql(
+            self._require_api_key(),
+            """
+            query($teamId: ID!) {
+              issues(filter: {
+                team: { id: { eq: $teamId } }
+              }, first: 100) {
+                nodes {
+                  id identifier title url state { name type } description
+                  labels { nodes { name } }
+                }
+              }
+            }
+            """,
+            {"teamId": team["id"]},
+        )
+        blocked_label = blocked_label.lower()
+        out = []
+        for issue in data["issues"]["nodes"]:
+            names = {l["name"].lower() for l in issue["labels"]["nodes"]}
+            if blocked_label in names:
                 out.append(issue)
         return out
+
+    def list_in_progress(self) -> List[dict]:
+        """REA-90 AC-5: assigned issues currently in a `started`-type
+        state, with `updatedAt` -- the daemon's stuck-issue recycler uses
+        this (rather than the local `.loop.pass.json`, which only exists
+        for a pass this same process started) to catch an issue claimed
+        by a run that never got as far as writing pass state, or whose
+        worktree was lost."""
+        team = self._resolve_team()
+        data = _gql(
+            self._require_api_key(),
+            """
+            query($teamId: ID!) {
+              issues(filter: {
+                team: { id: { eq: $teamId } }
+                state: { type: { eq: "started" } }
+                assignee: { null: false }
+              }, first: 100) {
+                nodes {
+                  id identifier title url updatedAt
+                  labels { nodes { name } }
+                }
+              }
+            }
+            """,
+            {"teamId": team["id"]},
+        )
+        return data["issues"]["nodes"]
+
+    def remove_label(self, issue_id: str, name: str) -> dict:
+        """REA-90 AC-2: drop a label (e.g. `blocked`) from an issue."""
+        api_key = self._require_api_key()
+        issue = self._resolve_issue(issue_id)
+        current = {l["id"]: l["name"] for l in issue["labels"]["nodes"]}
+        remaining = [lid for lid, lname in current.items() if lname.lower() != name.lower()]
+        data = _gql(
+            api_key,
+            """
+            mutation($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) { success issue { id identifier labels { nodes { name } } } }
+            }
+            """,
+            {"id": issue["id"], "input": {"labelIds": remaining}},
+        )
+        return data["issueUpdate"]["issue"]
 
     def list_in_review(self, review_label: str = "stage-in-review") -> List[dict]:
         """Issues currently awaiting review -- used by the pass engine's

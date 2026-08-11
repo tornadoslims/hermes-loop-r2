@@ -58,11 +58,32 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
                 from loop.pass_engine import PassEngineError, _linear_plugin
                 try:
                     linear = _linear_plugin(manager)
-                    ready = linear.list_ready()
+                    # REA-90 AC-2/AC-5: run before list_ready() so an
+                    # issue unblocked or recycled this tick is already
+                    # visible to the claim that follows.
+                    healer.auto_unblock()
+                    healer.recycle_stuck_issues()
+
+                    ready = linear.list_ready(log=print)
                     open_issues = ready if ready else (
                         linear.list_open() if hasattr(linear, "list_open") else []
                     )
                     healer.record_build_tick(len(ready), len(open_issues))
+
+                    # REA-90 AC-4: "1 ready-but-blocked issue" queue-drain
+                    # detection. `blocked_ready_count` = agent-ready
+                    # issues that are also labeled blocked (excluded from
+                    # `ready` by list_ready()'s dependency filter).
+                    blocked_ready_count = 0
+                    if hasattr(linear, "list_blocked"):
+                        try:
+                            for issue in linear.list_blocked():
+                                names = {l["name"].lower() for l in issue.get("labels", {}).get("nodes", [])}
+                                if "agent-ready" in names:
+                                    blocked_ready_count += 1
+                        except Exception:  # noqa: BLE001
+                            blocked_ready_count = 0
+                    healer.check_queue_drain(len(ready), blocked_ready_count)
                 except PassEngineError:
                     pass
                 healer.check_stall(scheduler_ref.get("scheduler"))
