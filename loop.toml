@@ -1,6 +1,13 @@
 [plugins]
 dir = "plugins"
 enabled = ["linear"]
+# To also enable the GitHub plugin (loop.plugins.github.GitHubPlugin),
+# add "github" here and set GITHUB_TOKEN in .env:
+#
+#   enabled = ["linear", "github"]
+#
+#   [plugins.config.github]
+#   repo = "tornadoslims/hermes-loop-r2"
 
 [plugins.config.linear]
 # team_key = "REA"  # optional; only required if the Linear workspace has
