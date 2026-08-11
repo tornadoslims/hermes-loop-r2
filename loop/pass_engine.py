@@ -145,7 +145,7 @@ def default_branch(config: Config) -> str:
     """The repo's default branch (e.g. "main"), read from the local
     `origin/HEAD` symref. Falls back to "main" if that symref isn't set
     (e.g. a fresh clone that has never fetched)."""
-    code, out, _ = _run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd=config.root)
+    code, out, _ = _run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd=config.target_repo_path)
     if code == 0 and out:
         return out.rsplit("/", 1)[-1]
     return "main"
@@ -170,15 +170,15 @@ def create_worktree(config: Config, role: str, worker_index: Optional[int] = Non
     if os.path.isdir(wt):
         shutil.rmtree(wt, ignore_errors=True)
 
-    _run(["git", "worktree", "prune"], cwd=config.root, timeout=60)
-    code, _, err = _run(["git", "fetch", "origin", branch], cwd=config.root, timeout=180)
+    _run(["git", "worktree", "prune"], cwd=config.target_repo_path, timeout=60)
+    code, _, err = _run(["git", "fetch", "origin", branch], cwd=config.target_repo_path, timeout=180)
     if code != 0:
         raise PassEngineError(f"git fetch origin {branch} failed: {err}")
 
     os.makedirs(os.path.dirname(wt), exist_ok=True)
     code, _, err = _run(
         ["git", "worktree", "add", "--detach", wt, f"origin/{branch}"],
-        cwd=config.root, timeout=180,
+        cwd=config.target_repo_path, timeout=180,
     )
     if code != 0:
         raise PassEngineError(f"git worktree add failed: {err}")
@@ -189,10 +189,10 @@ def cleanup_worktree(config: Config, role: str, worker_index: Optional[int] = No
     """Remove the worktree for `role` (and optional `worker_index`), if one
     exists. Safe/no-op when it doesn't (used by the recover script -- AC-5)."""
     wt = worktree_path(config, role, worker_index)
-    _run(["git", "worktree", "remove", "--force", wt], cwd=config.root, timeout=60)
+    _run(["git", "worktree", "remove", "--force", wt], cwd=config.target_repo_path, timeout=60)
     if os.path.isdir(wt):
         shutil.rmtree(wt, ignore_errors=True)
-    _run(["git", "worktree", "prune"], cwd=config.root, timeout=60)
+    _run(["git", "worktree", "prune"], cwd=config.target_repo_path, timeout=60)
 
 
 # --------------------------------------------------------- state file (AC-6)

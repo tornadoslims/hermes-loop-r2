@@ -191,7 +191,7 @@ class SelfHealer:
             return None  # build pass isn't enabled -- nothing to force
 
         stall_s = parse_duration(self.config.pipeline.stall_timeout)
-        code, out, _ = _run(["git", "log", "-1", "--format=%ct"], cwd=self.config.root, timeout=30)
+        code, out, _ = _run(["git", "log", "-1", "--format=%ct"], cwd=self.config.target_repo_path, timeout=30)
         if code != 0 or not out.strip():
             return None
         age_s = self._now() - float(out.strip())

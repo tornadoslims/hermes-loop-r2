@@ -1,0 +1,250 @@
+diff --git a/loop/daemon.py b/loop/daemon.py
+index c6fa5a5..00b8cf7 100644
+--- a/loop/daemon.py
++++ b/loop/daemon.py
+@@ -202,7 +202,7 @@ class SelfHealer:
+                 linear.add_label(issue_id, "agent-ready")
+                 linear.add_comment(
+                     issue_id,
+-                    f"\\u26a0 {role} pass exceeded pass_timeout "
++                    f"\u26a0 {role} pass exceeded pass_timeout "
+                     f"({age_s:.0f}s, branch `{branch}`) after {attempts} resume "
+                     f"attempt(s). Auto-recovered by the self-healing daemon: "
+                     f"worktree reset, issue returned to the ready queue.",
+diff --git a/tests/test_agent_runner.py b/tests/test_agent_runner.py
+index a791624..3b183aa 100644
+--- a/tests/test_agent_runner.py
++++ b/tests/test_agent_runner.py
+@@ -280,7 +280,9 @@ def test_create_agent_runner_default_is_hermes():
+ def test_create_agent_runner_claude_code():
+     config = Config(
+         path="/tmp/loop.toml", raw={}, root="/tmp",
+-        target_repo_path="/tmp/repo",
++        loop=LoopConfig(engine="/tmp/fake-engine"),
++        target=TargetConfig(repo="x/y", path="/tmp/repo"),
++        linear=LinearConfig(),
+         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
+         pipeline=PipelineConfig(), events=EventsConfig(),
+         agent=AgentConfig(backend="claude-code", claude_code={"model": "sonnet"}),
+@@ -292,7 +294,9 @@ def test_create_agent_runner_claude_code():
+ def test_create_agent_runner_codex():
+     config = Config(
+         path="/tmp/loop.toml", raw={}, root="/tmp",
+-        target_repo_path="/tmp/repo",
++        loop=LoopConfig(engine="/tmp/fake-engine"),
++        target=TargetConfig(repo="x/y", path="/tmp/repo"),
++        linear=LinearConfig(),
+         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
+         pipeline=PipelineConfig(), events=EventsConfig(),
+         agent=AgentConfig(backend="codex"),
+@@ -304,7 +308,9 @@ def test_create_agent_runner_codex():
+ def test_create_agent_runner_unknown_backend_raises():
+     config = Config(
+         path="/tmp/loop.toml", raw={}, root="/tmp",
+-        target_repo_path="/tmp/repo",
++        loop=LoopConfig(engine="/tmp/fake-engine"),
++        target=TargetConfig(repo="x/y", path="/tmp/repo"),
++        linear=LinearConfig(),
+         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
+         pipeline=PipelineConfig(), events=EventsConfig(),
+         agent=AgentConfig(backend="nonexistent"),
+@@ -357,6 +363,12 @@ def test_agent_config_parsing():
+         toml_path = os.path.join(tmp, "loop.toml")
+         with open(toml_path, "w") as f:
+             f.write("""\
++[loop]
++engine = "/tmp/fake-engine"
++
++[target]
++repo = "x/y"
++
+ [plugins]
+ enabled = ["linear"]
+ 
+@@ -388,6 +400,12 @@ def test_agent_config_defaults_when_no_section():
+         toml_path = os.path.join(tmp, "loop.toml")
+         with open(toml_path, "w") as f:
+             f.write("""\
++[loop]
++engine = "/tmp/fake-engine"
++
++[target]
++repo = "x/y"
++
+ [plugins]
+ enabled = ["linear"]
+ 
+diff --git a/tests/test_daemon.py b/tests/test_daemon.py
+index 5c8198e..c118f76 100644
+--- a/tests/test_daemon.py
++++ b/tests/test_daemon.py
+@@ -48,7 +48,8 @@ def _init_bare_repo_with_clone(tmp_path):
+ 
+ def _write_config(clone, extra_pipeline=""):
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\n'
++        'enabled = ["linear"]\n\n[pipeline]\n'
+         'schedule_build = "5m"\nschedule_review = "5m"\n' + extra_pipeline
+     )
+     return load_config(str(clone))
+diff --git a/tests/test_pass_engine.py b/tests/test_pass_engine.py
+index 02412e1..4940d12 100644
+--- a/tests/test_pass_engine.py
++++ b/tests/test_pass_engine.py
+@@ -57,7 +57,8 @@ def _instance_dir(tmp_path, target_root):
+     instance = tmp_path / "instance"
+     instance.mkdir()
+     (instance / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\n'
++        'enabled = ["linear"]\n\n[pipeline]\n'
+         'schedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     return instance
+@@ -194,7 +195,7 @@ def test_start_build_raises_clear_error_when_linear_failed_to_start(tmp_path):
+ def test_pass_end_raises_when_linear_not_loaded_but_state_exists(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     wt = create_worktree(config, "build")
+@@ -236,7 +237,7 @@ def test_start_build_creates_worktree_claims_and_writes_state(tmp_path):
+     # create_worktree() uses config.root as the git repo, point loop.toml
+     # there directly for this test.
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+ 
+@@ -268,7 +269,7 @@ def test_create_worktree_is_never_a_bare_directory(tmp_path):
+     a hollow pre-existing directory must be cleaned up and replaced."""
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     hollow = pass_engine.worktree_path(config, "build")
+@@ -284,7 +285,7 @@ def test_create_worktree_is_never_a_bare_directory(tmp_path):
+ def test_cleanup_worktree_removes_it(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     wt = create_worktree(config, "build")
+@@ -298,7 +299,7 @@ def test_cleanup_worktree_removes_it(tmp_path):
+ def test_start_review_checks_out_branch_and_writes_state(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+ 
+@@ -331,7 +332,7 @@ def test_start_review_checks_out_branch_and_writes_state(tmp_path):
+ def test_pass_end_build_pushes_branch_comments_and_moves_to_review(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     linear = FakeLinearPlugin(ready=[{"identifier": "REA-3", "title": "Ship it", "url": "u"}])
+@@ -359,7 +360,7 @@ def test_pass_end_build_pushes_branch_comments_and_moves_to_review(tmp_path):
+ def test_pass_end_build_role_mismatch_raises(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     build_wt = create_worktree(config, "build")
+@@ -378,7 +379,7 @@ def test_pass_end_build_role_mismatch_raises(tmp_path):
+ def test_pass_end_review_approved_marks_done(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     build_wt = create_worktree(config, "build")
+@@ -400,7 +401,7 @@ def test_pass_end_review_approved_marks_done(tmp_path):
+ def test_pass_end_review_changes_requested_relabels_and_reassigns(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     build_wt = create_worktree(config, "build")
+@@ -423,7 +424,7 @@ def test_pass_end_review_changes_requested_relabels_and_reassigns(tmp_path):
+ def test_pass_end_review_needs_rebase_includes_rebase_instructions(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     build_wt = create_worktree(config, "build")
+@@ -444,7 +445,7 @@ def test_pass_end_review_needs_rebase_includes_rebase_instructions(tmp_path):
+ def test_pass_end_review_unknown_outcome_raises(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     build_wt = create_worktree(config, "build")
+@@ -463,7 +464,7 @@ def test_pass_end_review_unknown_outcome_raises(tmp_path):
+ def test_pass_end_build_opens_pr_before_moving_to_review(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     linear = FakeLinearPlugin(ready=[{"identifier": "REA-120", "title": "Fix pr gap", "url": "u"}])
+@@ -492,7 +493,7 @@ def test_pass_end_build_opens_pr_before_moving_to_review(tmp_path):
+ def test_pass_end_build_reuses_existing_pr_without_recreating(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     linear = FakeLinearPlugin(ready=[{"identifier": "REA-121", "title": "Already has pr", "url": "u"}])
+@@ -511,7 +512,7 @@ def test_pass_end_build_reuses_existing_pr_without_recreating(tmp_path):
+ def test_pass_end_build_does_not_move_to_review_when_pr_creation_fails(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     linear = FakeLinearPlugin(ready=[{"identifier": "REA-122", "title": "Pr fails", "url": "u"}])
+@@ -537,7 +538,7 @@ def test_pass_end_build_without_github_plugin_unchanged(tmp_path):
+     """No github plugin configured -- behavior identical to pre-REA-120."""
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
+-        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++        '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+     )
+     config = load_config(str(clone))
+     linear = FakeLinearPlugin(ready=[{"identifier": "REA-123", "title": "No github", "url": "u"}])
+diff --git a/tests/test_plugin_manager.py b/tests/test_plugin_manager.py
+index c03cae5..1d34dd1 100644
+--- a/tests/test_plugin_manager.py
++++ b/tests/test_plugin_manager.py
+@@ -51,7 +51,7 @@ BROKEN_PLUGIN = textwrap.dedent(
+ def _make_config(tmp_path, plugin_dir, enabled):
+     toml_path = tmp_path / "loop.toml"
+     enabled_str = ", ".join(f'"{e}"' for e in enabled)
+-    toml_path.write_text(f'[plugins]\ndir = "{plugin_dir.name}"\nenabled = [{enabled_str}]\n')
++    toml_path.write_text(f'[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\ndir = "{plugin_dir.name}"\nenabled = [{enabled_str}]\n')
+     return load_config(str(toml_path))

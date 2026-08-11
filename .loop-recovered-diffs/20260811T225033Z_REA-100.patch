@@ -1,0 +1,694 @@
+diff --git a/loop/cli.py b/loop/cli.py
+index 6357e26..1d87086 100644
+--- a/loop/cli.py
++++ b/loop/cli.py
+@@ -577,6 +577,20 @@ def cmd_version(args) -> int:
+ 
+ 
+ _INIT_TOML = textwrap.dedent("""\
++    [loop]
++    # Absolute path to the hermes-loop-r2 engine repository.
++    engine = "/path/to/hermes-loop-r2"
++
++    [target]
++    # GitHub owner/repo slug for the target repository.
++    repo = "owner/name"
++    # Local checkout path (defaults to this config's directory if omitted).
++    # path = "/path/to/repo"
++
++    [linear]
++    team_key = "REA"
++    project = ""
++
+     [plugins]
+     # Directory for plugin modules, relative to this config file.
+     dir = "plugins"
+@@ -595,10 +609,20 @@ _INIT_TOML = textwrap.dedent("""\
+     pass_timeout = "30m"
+     stall_timeout = "30m"
+     queue_warn_ticks = 3
++    automerge = false
++    skills = []
+ 
+     [events]
+     log_file = "events.jsonl"
+ 
++    [scheduler]
++    enabled = true
++
++    [webui]
++    host = "0.0.0.0"
++    port = 8765
++    enabled = true
++
+     [self_update]
+     enabled = true
+     check_interval = "30m"
+diff --git a/loop/config.py b/loop/config.py
+index ad3d685..7c196c1 100644
+--- a/loop/config.py
++++ b/loop/config.py
+@@ -1,47 +1,25 @@
+ """loop.toml config loading for hermes-loop-r2.
+ 
+-Extends the r1 loop.toml shape (see r1's loop/config.py for the format
+-this is compatible with) with a [plugins] section:
+-
+-    [plugins]
+-    dir = "plugins"                 # path to the plugin directory,
+-                                     # relative to the loop.toml file
+-                                     # unless absolute
+-    enabled = ["linear"]            # plugin names (module stem, e.g.
+-                                     # "linear" for plugins/linear.py)
+-                                     # to load, in order
+-
+-    [plugins.config.linear]
+-    team_key = "REA"                # arbitrary plugin-specific config,
+-                                     # passed verbatim to init()
+-
+-    [pipeline]
+-    schedule_build = "5m"           # how often to run a build pass
+-    schedule_review = "5m"          # how often to run a review pass
+-                                     # (Go-style duration strings: "30s",
+-                                     # "5m", "1h" -- see loop/scheduler.py)
+-    pass_timeout = "30m"            # (REA-89 AC-1/AC-8) a pass whose
+-                                     # .loop.pass.json is older than this
+-                                     # is considered stuck and auto-recovered
+-    stall_timeout = "30m"           # (REA-89 AC-2/AC-8) no commits to the
+-                                     # target repo within this window, with
+-                                     # a non-empty ready queue, forces an
+-                                     # immediate build tick
+-    queue_warn_ticks = 3             # (REA-89 AC-3/AC-8) consecutive empty
+-                                     # -queue build ticks before a
+-                                     # QueueEmpty event is emitted
+-
+-    [events]
+-    log_file = "events.jsonl"       # path to append JSON lines of every
+-                                     # EventBus event (loop/events.py),
+-                                     # written by the built-in LogPlugin.
+-                                     # Relative paths resolve against the
+-                                     # instance directory (default);
+-                                     # absolute paths pass through.
+-
+-All paths in the returned Config are resolved to absolute paths so
+-callers never need to know where loop.toml itself lives.
++Every section in loop.toml has a typed dataclass with documented defaults.
++Unknown top-level sections and missing required fields raise clear,
++actionable ConfigError messages identifying the offending key.
++
++Sections (all optional unless noted):
++  [loop]       -- engine path (required)
++  [target]     -- repo slug and local path (repo required, path defaults to cwd)
++  [linear]     -- Linear team key and project
++  [plugins]    -- plugin directory, enabled list, per-plugin config
++  [pipeline]   -- build/review schedules, timeouts, auto-merge toggle
++  [events]     -- event log file path
++  [agent]      -- agent backend selection (hermes / claude-code / codex)
++  [watcher]    -- file-watcher toggle and poll interval
++  [scheduler]  -- scheduler-specific configuration
++  [webui]      -- embedded web UI host, port, and toggle
++
++All paths are resolved to absolute so callers never need to know where
++loop.toml itself lives.
+ """
++
+ from __future__ import annotations
+ 
+ import os
+@@ -54,13 +32,76 @@ if sys.version_info >= (3, 11):
+ else:  # pragma: no cover - exercised only on Python < 3.11
+     import tomli as tomllib
+ 
++# ── known TOML top-level sections ──────────────────────────────────────
++# Every section that the parser treats as a first-class config surface.
++# Anything else triggers an unknown-section error (AC-3).
++_KNOWN_SECTIONS = {
++    "loop",
++    "target",
++    "linear",
++    "plugins",
++    "pipeline",
++    "events",
++    "agent",
++    "watcher",
++    "scheduler",
++    "webui",
++    "self_update",
++}
++
++
++# ── exceptions ─────────────────────────────────────────────────────────
++
+ 
+ class ConfigError(Exception):
+     """Raised for a missing or malformed loop.toml."""
+ 
+ 
++# ── per-section dataclasses ────────────────────────────────────────────
++
++
++@dataclass
++class LoopConfig:
++    """[loop] section — the engine that drives this instance."""
++
++    engine: str = ""
++    """Absolute path to the hermes-loop engine repository.
++
++    Required field — the daemon cannot start without knowing which engine
++    to invoke for pass_start / pass_end scripts.  Omission raises
++    ConfigError.
++    """
++
++
++@dataclass
++class TargetConfig:
++    """[target] section — the repository this loop instance manages."""
++
++    repo: str = ""
++    """GitHub slug (owner/repo).  Required — no default because there is
++    no sensible fallback."""
++
++    path: str = ""
++    """Absolute local path to the target repo checkout.  Defaults to the
++    directory containing loop.toml at parse time (resolved before the
++    Config is returned)."""
++
++
++@dataclass
++class LinearConfig:
++    """[linear] section — Linear workspace configuration."""
++
++    team_key: str = ""
++    """Short team key (e.g. \"REA\") used to construct issue identifiers."""
++
++    project: str = ""
++    """Linear project name to scope issue queries against (optional)."""
++
++
+ @dataclass
+ class PluginsConfig:
++    """[plugins] section — plugin directory, enabled list, per-plugin config."""
++
+     dir: str = "plugins"
+     enabled: List[str] = field(default_factory=list)
+     config: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+@@ -68,15 +109,25 @@ class PluginsConfig:
+ 
+ @dataclass
+ class PipelineConfig:
++    """[pipeline] section — build/review cadences, timeouts, merging."""
++
+     schedule_build: str = "5m"
+     schedule_review: str = "5m"
+     pass_timeout: str = "30m"
+     stall_timeout: str = "30m"
+     queue_warn_ticks: int = 3
++    automerge: bool = False
++    """If true, an approved review automatically merges the PR. (REA-157)"""
++
++    skills: List[str] = field(default_factory=list)
++    """Skill names loaded by the builder agent.  Passed through to the
++    agent runner during build ticks. (REA-157)"""
+ 
+ 
+ @dataclass
+ class AgentConfig:
++    """[agent] section — agent backend selection and per-backend config."""
++
+     backend: str = "hermes"  # hermes | claude-code | codex
+     timeout: str = "1h"
+     hermes: Dict[str, Any] = field(default_factory=dict)
+@@ -95,32 +146,168 @@ class AgentConfig:
+ 
+ @dataclass
+ class EventsConfig:
++    """[events] section — event logging configuration."""
++
+     log_file: str = "events.jsonl"
++    """Path to append JSON-lines of every EventBus event.  Relative paths
++    resolve against the instance (loop.toml) directory."""
+ 
+ 
+ @dataclass
+ class WatcherConfig:
++    """[watcher] section — file-watcher toggle and poll interval."""
++
+     enabled: bool = False
+     poll_interval: str = "15s"
+ 
+ 
++@dataclass
++class SchedulerConfig:
++    """[scheduler] section — scheduler-specific settings.
++
++    Note: basic cadence (schedule_build/schedule_review) is still read
++    from [pipeline].  This section holds scheduler-internal knobs that
++    aren't pipeline-policy decisions.
++    """
++
++    enabled: bool = True
++    """If false, the scheduler never fires build/review ticks.  The
++    daemon still runs (web UI, health checks, etc.) but no passes are
++    started automatically.  Forced ticks via the self-healer
++    (check_stall) are still honoured."""
++
++
++@dataclass
++class WebUIConfig:
++    """[webui] section — embedded web UI server configuration."""
++
++    host: str = "0.0.0.0"
++    port: int = 8765
++    enabled: bool = True
++    """If false, the web UI server is not started.  /health and /metrics
++    endpoints are unavailable — use the daemon's stdout log instead."""
++
++
++@dataclass
++class SelfUpdateConfig:
++    """[self_update] section — self-update checker (REA-128).
++
++    Controls how often the daemon checks the engine repo for new commits.
++    """
++
++    enabled: bool = True
++    """If false, the self-update checker never reaches out to git remotes."""
++
++    check_interval: str = "30m"
++    """How often to fetch and compare (Go-style duration)."""
++
++
++# ── top-level Config ───────────────────────────────────────────────────
++
++
+ @dataclass
+ class Config:
++    """Fully-typed loop.toml surface.
++
++    Every recognised section is parsed into its dataclass.  ``raw``
++    carries the original parsed TOML dict so consumers that need to
++    handle experimental keys can still reach them.
++    """
++
+     path: str
++    """Absolute path to the loop.toml file that was loaded."""
++
+     raw: Dict[str, Any]
++    """The raw, unprocessed TOML dict (all sections)."""
++
+     root: str
+-    target_repo_path: str
++    """Directory containing loop.toml — the instance directory."""
++
++    loop: LoopConfig
++    """[loop] section."""
++
++    target: TargetConfig
++    """[target] section."""
++
++    linear: LinearConfig
++    """[linear] section."""
++
+     plugins: PluginsConfig
++    """[plugins] section."""
++
+     pipeline: PipelineConfig
++    """[pipeline] section."""
++
+     events: EventsConfig
+-    agent: Optional[AgentConfig] = None
++    """[events] section."""
++
+     watcher: WatcherConfig = field(default_factory=WatcherConfig)
++    """[watcher] section."""
++
++    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
++    """[scheduler] section."""
++
++    webui: WebUIConfig = field(default_factory=WebUIConfig)
++    """[webui] section."""
++
++    agent: Optional[AgentConfig] = None
++    """[agent] section — None when the section is absent."""
++
++    self_update: SelfUpdateConfig = field(default_factory=SelfUpdateConfig)
++    """[self_update] section."""
++
++    # ── convenience helpers (backward-compatible) ─────────────────
++
++    @property
++    def target_repo_path(self) -> str:
++        """Absolute path to the target repo checkout (from [target].path)."""
++        return self.target.path
+ 
+     def plugin_config(self, name: str) -> Dict[str, Any]:
+         """Plugin-specific config block for `name`, or {} if none set."""
+         return self.plugins.config.get(name, {})
+ 
+ 
++# ── validation ─────────────────────────────────────────────────────────
++
++
++def _validate_sections(raw: Dict[str, Any], toml_path: str) -> None:
++    """Reject unknown top-level TOML sections (AC-3).
++
++    Every key in ``raw`` must be a known section name.  Unknown keys
++    raise ConfigError identifying the offending key and listing the
++    allowed set — actionable enough that a human (or an agent) can fix
++    the typo without hunting through source code.
++    """
++    unknown = [k for k in raw if k not in _KNOWN_SECTIONS]
++    if unknown:
++        allowed = ", ".join(sorted(_KNOWN_SECTIONS))
++        offenders = ", ".join(repr(u) for u in unknown)
++        raise ConfigError(
++            f"unknown top-level section(s) in {toml_path!r}: {offenders}.\n"
++            f"Allowed sections: {allowed}"
++        )
++
++
++def _validate_required(raw: Dict[str, Any], section: str, key: str, toml_path: str) -> None:
++    """Raise ConfigError if ``section.key`` is missing in the raw dict.
++
++    Used for fields that have no sensible default (e.g. ``[loop].engine``,
++    ``[target].repo``).
++    """
++    if not raw.get(section, {}):
++        raise ConfigError(
++            f"missing required section [{section}] in {toml_path!r}"
++        )
++    if key not in raw[section]:
++        raise ConfigError(
++            f"missing required key [{section}].{key} in {toml_path!r}"
++        )
++
++
++# ── loader ─────────────────────────────────────────────────────────────
++
++
+ def find_loop_toml(start: str | None = None) -> str:
+     """Walk upward from `start` (default cwd) looking for loop.toml."""
+     d = os.path.abspath(start or os.getcwd())
+@@ -132,12 +319,23 @@ def find_loop_toml(start: str | None = None) -> str:
+         if parent == d:
+             break
+         d = parent
+-    raise ConfigError(f"no loop.toml found walking up from {start or os.getcwd()!r}")
++    raise ConfigError(
++        f"no loop.toml found walking up from {start or os.getcwd()!r}"
++    )
+ 
+ 
+ def load_config(path: str | None = None) -> Config:
+-    """Load and validate loop.toml. `path` may be a loop.toml file path,
+-    a directory containing one, or None to search upward from cwd."""
++    """Load and validate loop.toml.
++
++    ``path`` may be:
++      - a loop.toml file path
++      - a directory containing loop.toml
++      - None (search upward from cwd)
++
++    Returns a fully-typed ``Config``.  Raises ``ConfigError`` on missing
++    files, TOML parse errors, unknown sections, or missing required keys.
++    """
++    # ── resolve path ───────────────────────────────────────────────
+     if path is None:
+         toml_path = find_loop_toml()
+     elif os.path.isdir(path):
+@@ -148,60 +346,131 @@ def load_config(path: str | None = None) -> Config:
+     if not os.path.isfile(toml_path):
+         raise ConfigError(f"loop.toml not found at {toml_path!r}")
+ 
++    # ── parse ──────────────────────────────────────────────────────
+     with open(toml_path, "rb") as f:
+         try:
+-            raw = tomllib.load(f)
++            raw: Dict[str, Any] = tomllib.load(f)
+         except tomllib.TOMLDecodeError as e:
+             raise ConfigError(f"failed to parse {toml_path!r}: {e}") from e
+ 
++    # ── validate ───────────────────────────────────────────────────
++    _validate_sections(raw, toml_path)
++
+     root = os.path.dirname(os.path.abspath(toml_path))
+ 
++    # ── [loop]  (required: engine) ─────────────────────────────────
++    _validate_required(raw, "loop", "engine", toml_path)
++    loop = LoopConfig(
++        engine=os.path.abspath(str(raw["loop"]["engine"])),
++    )
++
++    # ── [target]  (required: repo) ─────────────────────────────────
++    _validate_required(raw, "target", "repo", toml_path)
++    target_raw = raw["target"]
++    target_path = target_raw.get("path", root)
++    if not os.path.isabs(str(target_path)):
++        target_path = os.path.normpath(os.path.join(root, str(target_path)))
++    target = TargetConfig(
++        repo=str(target_raw["repo"]),
++        path=os.path.abspath(str(target_path)),
++    )
++
++    # ── [linear]  (all optional) ───────────────────────────────────
++    linear_raw = raw.get("linear", {}) or {}
++    linear = LinearConfig(
++        team_key=str(linear_raw.get("team_key", "")),
++        project=str(linear_raw.get("project", "")),
++    )
++
++    # ── [plugins] ──────────────────────────────────────────────────
+     plugins_raw = raw.get("plugins", {}) or {}
+     plugin_dir = plugins_raw.get("dir", "plugins")
+-    if not os.path.isabs(plugin_dir):
+-        plugin_dir = os.path.normpath(os.path.join(root, plugin_dir))
++    if not os.path.isabs(str(plugin_dir)):
++        plugin_dir = os.path.normpath(os.path.join(root, str(plugin_dir)))
+     enabled = plugins_raw.get("enabled", []) or []
+     if not isinstance(enabled, list):
+         raise ConfigError("[plugins].enabled must be a list of plugin names")
+     plugin_config = plugins_raw.get("config", {}) or {}
++    plugins = PluginsConfig(
++        dir=str(plugin_dir),
++        enabled=list(enabled),
++        config=dict(plugin_config),
++    )
+ 
+-    plugins = PluginsConfig(dir=plugin_dir, enabled=list(enabled), config=dict(plugin_config))
+-
++    # ── [pipeline] ─────────────────────────────────────────────────
+     pipeline_raw = raw.get("pipeline", {}) or {}
++    skills_raw = pipeline_raw.get("skills", []) or []
+     pipeline = PipelineConfig(
+-        schedule_build=pipeline_raw.get("schedule_build", "5m"),
+-        schedule_review=pipeline_raw.get("schedule_review", "5m"),
+-        pass_timeout=pipeline_raw.get("pass_timeout", "30m"),
+-        stall_timeout=pipeline_raw.get("stall_timeout", "30m"),
++        schedule_build=str(pipeline_raw.get("schedule_build", "5m")),
++        schedule_review=str(pipeline_raw.get("schedule_review", "5m")),
++        pass_timeout=str(pipeline_raw.get("pass_timeout", "30m")),
++        stall_timeout=str(pipeline_raw.get("stall_timeout", "30m")),
+         queue_warn_ticks=int(pipeline_raw.get("queue_warn_ticks", 3)),
++        automerge=bool(pipeline_raw.get("automerge", False)),
++        skills=list(skills_raw) if isinstance(skills_raw, list) else [],
+     )
+ 
++    # ── [events] ───────────────────────────────────────────────────
+     events_raw = raw.get("events", {}) or {}
+-    log_file = events_raw.get("log_file", "events.jsonl")
++    log_file = str(events_raw.get("log_file", "events.jsonl"))
+     if not os.path.isabs(log_file):
+         log_file = os.path.normpath(os.path.join(root, log_file))
+     events = EventsConfig(log_file=log_file)
+ 
+-    # --- [agent] section (REA-155)
++    # ── [agent] ────────────────────────────────────────────────────
+     agent_raw = raw.get("agent", {}) or {}
+     agent: Optional[AgentConfig] = None
+     if agent_raw:
+         agent = AgentConfig(
+-            backend=agent_raw.get("backend", "hermes"),
+-            timeout=agent_raw.get("timeout", "1h"),
++            backend=str(agent_raw.get("backend", "hermes")),
++            timeout=str(agent_raw.get("timeout", "1h")),
+             hermes=dict(agent_raw.get("hermes", {}) or {}),
+             claude_code=dict(agent_raw.get("claude_code", {}) or {}),
+             codex=dict(agent_raw.get("codex", {}) or {}),
+         )
+ 
++    # ── [watcher] ──────────────────────────────────────────────────
+     watcher_raw = raw.get("watcher", {}) or {}
+     watcher = WatcherConfig(
+         enabled=bool(watcher_raw.get("enabled", False)),
+         poll_interval=str(watcher_raw.get("poll_interval", "15s")),
+     )
+ 
+-    target_raw = raw.get("target", {}) or {}
+-    target_repo_path = os.path.abspath(target_raw.get("path", root))
++    # ── [scheduler] ────────────────────────────────────────────────
++    scheduler_raw = raw.get("scheduler", {}) or {}
++    scheduler = SchedulerConfig(
++        enabled=bool(scheduler_raw.get("enabled", True)),
++    )
++
++    # ── [webui] ────────────────────────────────────────────────────
++    webui_raw = raw.get("webui", {}) or {}
++    webui = WebUIConfig(
++        host=str(webui_raw.get("host", "0.0.0.0")),
++        port=int(webui_raw.get("port", 8765)),
++        enabled=bool(webui_raw.get("enabled", True)),
++    )
++
++    # ── [self_update] ──────────────────────────────────────────────
++    su_raw = raw.get("self_update", {}) or {}
++    self_update = SelfUpdateConfig(
++        enabled=bool(su_raw.get("enabled", True)),
++        check_interval=str(su_raw.get("check_interval", "30m")),
++    )
+ 
+-    return Config(path=toml_path, raw=raw, root=root, target_repo_path=target_repo_path,
+-                  plugins=plugins, pipeline=pipeline, events=events, agent=agent, watcher=watcher)
++    # ── assemble ───────────────────────────────────────────────────
++    return Config(
++        path=toml_path,
++        raw=raw,
++        root=root,
++        loop=loop,
++        target=target,
++        linear=linear,
++        plugins=plugins,
++        pipeline=pipeline,
++        events=events,
++        watcher=watcher,
++        scheduler=scheduler,
++        webui=webui,
++        agent=agent,
++        self_update=self_update,
++    )
+\ No newline at end of file
+diff --git a/loop/daemon.py b/loop/daemon.py
+index c6fa5a5..00b8cf7 100644
+--- a/loop/daemon.py
++++ b/loop/daemon.py
+@@ -202,7 +202,7 @@ class SelfHealer:
+                 linear.add_label(issue_id, "agent-ready")
+                 linear.add_comment(
+                     issue_id,
+-                    f"\\u26a0 {role} pass exceeded pass_timeout "
++                    f"\u26a0 {role} pass exceeded pass_timeout "
+                     f"({age_s:.0f}s, branch `{branch}`) after {attempts} resume "
+                     f"attempt(s). Auto-recovered by the self-healing daemon: "
+                     f"worktree reset, issue returned to the ready queue.",
+diff --git a/loop/self_update.py b/loop/self_update.py
+index cfb1318..feb9c8d 100644
+--- a/loop/self_update.py
++++ b/loop/self_update.py
+@@ -55,10 +55,10 @@ class SelfUpdater:
+         self._run = _run_fn or _default_run
+ 
+         # Load [self_update] section, falling back to defaults.
+-        su_raw: Dict[str, Any] = config.raw.get("self_update", {}) or {}
++        su = config.self_update
+         self._su = SelfUpdateConfig(
+-            enabled=bool(su_raw.get("enabled", True)),
+-            check_interval=str(su_raw.get("check_interval", "30m")),
++            enabled=su.enabled,
++            check_interval=su.check_interval,
+         )
+ 
+         # Internal rate-limiting state.
+diff --git a/tests/test_agent_runner.py b/tests/test_agent_runner.py
+index a791624..e7d8b6f 100644
+--- a/tests/test_agent_runner.py
++++ b/tests/test_agent_runner.py
+@@ -269,7 +269,9 @@ def test_hermes_run_review_nonzero_exit_raises(sample_issue):
+ def test_create_agent_runner_default_is_hermes():
+     config = Config(
+         path="/tmp/loop.toml", raw={}, root="/tmp",
+-        target_repo_path="/tmp/repo",
++        loop=LoopConfig(engine="/tmp/fake-engine"),
++        target=TargetConfig(repo="x/y", path="/tmp/repo"),
++        linear=LinearConfig(),
+         plugins=PluginsConfig(dir="/tmp/plugins", enabled=["linear"]),
+         pipeline=PipelineConfig(), events=EventsConfig(), agent=None,
+     )
+diff --git a/tests/test_config.py b/tests/test_config.py
+index 184e5d9..f6a29b7 100644
+--- a/tests/test_config.py
++++ b/tests/test_config.py
+@@ -12,7 +12,7 @@ def _write(tmp_path, content):
+ 
+ 
+ def test_load_minimal_config(tmp_path):
+-    path = _write(tmp_path, "[target]\nrepo = \"x/y\"\n")
++    path = _write(tmp_path, "[loop]\nengine = \"/tmp/fake-engine\"\n\n[target]\nrepo = \"x/y\"\n")
+     cfg = load_config(path)
+     assert cfg.plugins.dir == str(tmp_path / "plugins")
+     assert cfg.plugins.enabled == []
+@@ -23,14 +23,14 @@ def test_load_minimal_config(tmp_path):
+ 
+ 
+ def test_load_events_section(tmp_path):
+-    path = _write(tmp_path, '[events]\nlog_file = "history.jsonl"\n')
++    path = _write(tmp_path, '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[events]\nlog_file = "history.jsonl"\n')
+     cfg = load_config(path)
+     assert cfg.events.log_file == str(tmp_path / "history.jsonl")
+ 
+ 
+ def test_events_log_file_absolute_passthrough(tmp_path):
+     abs_path = str(tmp_path / "somewhere" / "events.jsonl")
+-    path = _write(tmp_path, f'[events]\nlog_file = "{abs_path}"\n')
++    path = _write(tmp_path, f'[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[events]\nlog_file = "{abs_path}"\n')
+     cfg = load_config(path)
+     assert cfg.events.log_file == abs_path
+ 
+@@ -39,6 +39,12 @@ def test_load_pipeline_section(tmp_path):
+     path = _write(
+         tmp_path,
+         """
++[loop]
++engine = "/tmp/fake-engine"
++
++[target]
++repo = "x/y"
++
+ [pipeline]
+ schedule_build = "10m"
+ schedule_review = "15m"
+@@ -53,6 +59,12 @@ def test_load_plugins_section(tmp_path):
+     path = _write(
+         tmp_path,
+         """
++[loop]
++engine = "/tmp/fake-engine"
++
++[target]
++repo = "x/y"
++
+ [plugins]
+ dir = "plugins"
+ enabled = ["linear"]
+@@ -68,13 +80,13 @@ team_key = "REA"
+ 
+ def test_plugin_dir_absolute_passthrough(tmp_path):
+     abs_dir = str(tmp_path / "somewhere" / "plugins")
+-    path = _write(tmp_path, f'[plugins]\ndir = "{abs_dir}"\n')
++    path = _write(tmp_path, f'[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\ndir = "{abs_dir}"\n')
+     cfg = load_config(path)
+     assert cfg.plugins.dir == abs_dir
+ 
+ 
+ def test_load_from_directory(tmp_path):
+-    _write(tmp_path, "[target]\nrepo = \"x/y\"\n")
++    _write(tmp_path, "[loop]\nengine = \"/tmp/fake-engine\"\n\n[target]\nrepo = \"x/y\"\n")
+     cfg = load_config(str(tmp_path))
+     assert cfg.path == str(tmp_path / "loop.toml")
+ 
+@@ -85,7 +97,7 @@ def test_missing_loop_toml_raises(tmp_path):
+ 
+ 
+ def test_enabled_must_be_list(tmp_path):
+-    path = _write(tmp_path, '[plugins]\nenabled = "linear"\n')
++    path = _write(tmp_path, '[loop]\nengine = "/tmp/fake-engine"\n\n[target]\nrepo = "x/y"\n\n[plugins]\nenabled = "linear"\n')
+     with pytest.raises(ConfigError):
+         load_config(path)

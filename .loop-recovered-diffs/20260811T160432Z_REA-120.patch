@@ -1,0 +1,538 @@
+diff --git a/loop/cli.py b/loop/cli.py
+index 072a629..bfdefc5 100644
+--- a/loop/cli.py
++++ b/loop/cli.py
+@@ -54,6 +54,7 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer, scheduler_ref: Dic
+         try:
+             healer.check_stuck_passes()
+             healer.check_plugin_health()
++            healer.check_missing_prs()
+             if role == "build":
+                 from loop.pass_engine import PassEngineError, _linear_plugin
+                 try:
+diff --git a/loop/daemon.py b/loop/daemon.py
+index b2442ce..eac9adb 100644
+--- a/loop/daemon.py
++++ b/loop/daemon.py
+@@ -31,6 +31,7 @@ from loop.events import (
+     IssueUnblocked,
+     PluginDegraded,
+     PluginRecovered,
++    PRCreated,
+     QueueEmpty,
+     QueueStalled,
+     RecoveryEvent,
+@@ -40,7 +41,10 @@ from loop.pass_engine import (
+     STATE_FILENAME,
+     PassEngineError,
+     _linear_plugin,
++    _optional_plugin,
+     _run,
++    branch_for_issue,
++    default_branch,
+     delete_state,
+     read_state,
+     worktree_path,
+@@ -451,6 +455,100 @@ class SelfHealer:
+             recycled.append(event)
+         return recycled
+ 
++    # ---------------------------------------------------------- AC-6 (REA-120)
++
++    def check_missing_prs(self) -> List[PRCreated]:
++        """REA-120: reconcile a stalled build->review handoff -- an
++        issue Linear says is in-review (`list_in_review()`), with its
++        branch already pushed to origin, but with zero GitHub PR ever
++        opened for that branch. This is exactly the REA-85 failure
++        mode: `_end_build` used to move an issue to In Review right
++        after pushing, with no atomic guarantee a PR followed (fixed
++        going forward in `pass_engine._end_build`, REA-120), so a
++        pre-existing gap between "Linear says in-review" and "a PR
++        exists" needs its own periodic sweep independent of any single
++        build pass.
++
++        No-ops entirely (returns `[]`) when no `github` plugin is
++        configured -- this check has nothing to reconcile against
++        without a PR host. For each affected issue: since the commit
++        and branch already exist and are safe to expose, auto-create
++        the missing PR (rather than merely alerting) and emit
++        `PRCreated`, mirroring what a human already had to do by hand
++        for REA-85."""
++        github = _optional_plugin(self.manager, "github")
++        if github is None:
++            return []
++        try:
++            linear = _linear_plugin(self.manager)
++            in_review = linear.list_in_review()
++        except PassEngineError:
++            return []
++
++        created: List[PRCreated] = []
++        base = None
++        for issue in in_review:
++            issue_id = issue.get("identifier")
++            if not issue_id:
++                continue
++            branch = branch_for_issue(issue_id, issue.get("title", ""))
++            if not branch:
++                continue
++
++            try:
++                existing = github.find_pr_for_branch(branch)
++            except Exception:  # noqa: BLE001 - one bad lookup must not break the sweep
++                continue
++            if existing:
++                continue  # already has a PR -- nothing to reconcile
++
++            code, out, _ = _run(["git", "ls-remote", "--heads", "origin", branch],
++                                 cwd=self.config.root, timeout=30)
++            has_branch = code == 0 and bool(out.strip())
++            if not has_branch:
++                continue  # branch not even pushed yet -- not this check's problem
++
++            if base is None:
++                base = default_branch(self.config)
++
++            title = issue.get("title") or f"{issue_id}"
++            try:
++                pr = github.create_pr(
++                    title=f"{issue_id}: {title}", head=branch, base=base,
++                    body=f"Closes #{issue_id}\n\nAuto-opened by the self-healing "
++                         f"daemon: `{branch}` was pushed and {issue_id} was marked "
++                         f"in-review, but no PR had ever been opened for it.",
++                )
++            except Exception as e:  # noqa: BLE001 - escalate, don't crash the tick
++                try:
++                    linear.add_comment(
++                        issue_id,
++                        f"\u26a0 Reconciliation found branch `{branch}` pushed and "
++                        f"this issue marked in-review with no GitHub PR, but "
++                        f"auto-creating one failed: {e}. Needs a human look.",
++                    )
++                    linear.add_label(issue_id, "needs-human-review")
++                except Exception:  # noqa: BLE001
++                    pass
++                continue
++
++            try:
++                linear.add_comment(
++                    issue_id,
++                    f"\u26a0 Auto-recovered: this issue's branch `{branch}` was "
++                    f"pushed and marked in-review with no GitHub PR ever opened. "
++                    f"The self-healing daemon opened {pr.get('url')} to unstall "
++                    f"loop-review.",
++                )
++            except Exception:  # noqa: BLE001 - PR already exists even if the comment fails
++                pass
++
++            event = PRCreated(issue_id=issue_id, pr_number=str(pr.get("pr_number")),
++                               url=pr.get("url", ""), timestamp=datetime.now())
++            self.manager.emit(event)
++            created.append(event)
++        return created
++
+     # ------------------------------------------------------------ AC-4
+ 
+     def check_plugin_health(self) -> List[Any]:
+diff --git a/loop/pass_engine.py b/loop/pass_engine.py
+index 62c98ca..3972ca9 100644
+--- a/loop/pass_engine.py
++++ b/loop/pass_engine.py
+@@ -97,6 +97,20 @@ def _linear_plugin(manager: PluginManager):
+     )
+ 
+ 
++def _optional_plugin(manager: PluginManager, name: str):
++    """Look up a loaded plugin by name without raising if it's absent,
++    errored, or never configured (REA-120: the GitHub plugin is opt-in
++    via [plugins].enabled -- most of this module's callers need to
++    degrade gracefully, not treat a missing plugin as a hard failure
++    the way `_linear_plugin` does for the required tracker)."""
++    for lp in getattr(manager, "plugins", []):
++        if lp.name == name:
++            if lp.error or lp.instance is None:
++                return None
++            return lp.instance
++    return None
++
++
+ def slugify(title: str, max_words: int = 5) -> str:
+     words = re.sub(r"[^a-z0-9\s-]", "", (title or "").lower()).split()
+     return "-".join(words[:max_words]) or "task"
+@@ -294,11 +308,25 @@ def _resolve(config: Optional[Config], manager: Optional[PluginManager], worktre
+     return config, manager, wt
+ 
+ 
+-def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
++def _end_build(config: Config, manager: PluginManager, worktree: str, state: Dict[str, Any],
+                **kwargs) -> Dict[str, Any]:
+     """AC-2: push the branch, add a comment with the branch name, move
+     the issue to review. NG-2/NG-3 out of scope here: no merging, no
+     conflict handling -- a failed push/fetch is reported, not resolved.
++
++    REA-120: if a `github` plugin is configured, opening the PR is part
++    of this same atomic hand-off -- push, then open the PR, and only
++    THEN move the Linear issue to In Review. A push that lands with no
++    PR ever gets opened silently starves `loop-review` (which needs a
++    real PR to act on), because nothing else in the pipeline notices
++    the mismatch between "branch pushed + Linear says in-review" and
++    "no PR exists". If PR creation fails, the issue is escalated
++    (`needs-human-review`) and left out of review rather than marked
++    in-review with nothing for review to look at -- this raises so the
++    caller sees a hard failure instead of a silently succeeded ship.
++    When no `github` plugin is loaded (opt-in via [plugins].enabled),
++    behavior is unchanged from before REA-120: push + move_to_review,
++    no PR involved.
+     """
+     linear = _linear_plugin(manager)
+     branch = state["branch"]
+@@ -319,12 +347,42 @@ def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
+     if code != 0:
+         raise PassEngineError(f"push of branch {branch!r} failed: {err}")
+ 
++    pr_url = None
++    github = _optional_plugin(manager, "github")
++    if github is not None:
++        base = default_branch(config)
++        title = f"{issue_id}: {state.get('issue_title', '')}" if issue_id else state.get("issue_title", branch)
++        body = f"Closes #{issue_id}" if issue_id else ""
++        try:
++            pr = github.create_pr(title=title, head=branch, base=base, body=body)
++            pr_url = pr.get("url")
++        except Exception as e:  # noqa: BLE001 - surfaced as a hard failure below
++            if issue_id:
++                linear.add_comment(
++                    issue_id,
++                    f"\u26a0 Branch `{branch}` pushed, but opening the GitHub PR "
++                    f"failed: {e}. Leaving this issue out of In Review until a "
++                    f"PR exists -- flagging needs-human-review.",
++                )
++                try:
++                    linear.add_label(issue_id, "needs-human-review")
++                except Exception:  # noqa: BLE001 - best-effort escalation label
++                    pass
++            raise PassEngineError(
++                f"branch {branch!r} pushed but GitHub PR creation failed: {e}"
++            ) from e
++
+     if issue_id:
+-        linear.add_comment(issue_id, f"Branch pushed: `{branch}`. Ready for review.")
++        comment = f"Branch pushed: `{branch}`."
++        if pr_url:
++            comment += f" PR opened: {pr_url}."
++        comment += " Ready for review."
++        linear.add_comment(issue_id, comment)
+         linear.move_to_review(issue_id)
+ 
+     delete_state(worktree)
+-    return {"ok": True, "role": "build", "issue": issue_id, "branch": branch, "phase": "submitted"}
++    return {"ok": True, "role": "build", "issue": issue_id, "branch": branch,
++            "phase": "submitted", "pr_url": pr_url}
+ 
+ 
+ _REVIEW_OUTCOMES = {"approved", "changes_requested", "needs_rebase"}
+@@ -391,5 +449,5 @@ def pass_end(role: str, *, manager: Optional[PluginManager] = None,
+         )
+ 
+     if role == "build":
+-        return _end_build(manager, worktree, state, **kwargs)
++        return _end_build(config, manager, worktree, state, **kwargs)
+     return _end_review(manager, worktree, state, outcome or "", **kwargs)
+diff --git a/loop/plugins/github.py b/loop/plugins/github.py
+index 143037b..effc740 100644
+--- a/loop/plugins/github.py
++++ b/loop/plugins/github.py
+@@ -345,3 +345,21 @@ class GitHubPlugin(Plugin):
+         except GitHubError:
+             return False
+         return bool(result and result.get("merged"))
++
++    def find_pr_for_branch(self, branch: str) -> Optional[dict]:
++        """Look up an open PR whose head is `branch` in this repo
++        (REA-120). Used by the reconciliation watchdog to detect a
++        stalled build->review handoff: a branch was pushed and Linear
++        says the issue is in-review, but no PR referencing that branch
++        was ever opened."""
++        owner = self._repo.split("/", 1)[0] if self._repo else None
++        head = f"{owner}:{branch}" if owner else branch
++        prs = self._call(
++            "GET",
++            f"/repos/{self._repo}/pulls",
++            params={"state": "open", "head": head, "per_page": 5},
++        )
++        for pr in prs or []:
++            if pr.get("head", {}).get("ref") == branch:
++                return {"pr_number": pr["number"], "url": pr["html_url"]}
++        return None
+diff --git a/tests/test_daemon.py b/tests/test_daemon.py
+index f908511..91a9ce5 100644
+--- a/tests/test_daemon.py
++++ b/tests/test_daemon.py
+@@ -16,6 +16,7 @@ from loop.events import (
+     IssueUnblocked,
+     PluginDegraded,
+     PluginRecovered,
++    PRCreated,
+     QueueEmpty,
+     QueueStalled,
+     RecoveryEvent,
+@@ -53,9 +54,10 @@ def _write_config(clone, extra_pipeline=""):
+ 
+ 
+ class FakeLinearPlugin:
+-    def __init__(self, ready=None, open_issues=None):
++    def __init__(self, ready=None, open_issues=None, in_review=None):
+         self._ready = ready or []
+         self._open = open_issues if open_issues is not None else list(self._ready)
++        self._in_review = in_review or []
+         self.calls = []
+         # REA-90: configurable stand-ins for the new plugin surface.
+         self._blocked = []
+@@ -110,6 +112,28 @@ class FakeLinearPlugin:
+         self.calls.append(("list_in_progress",))
+         return self._in_progress
+ 
++    def list_in_review(self):
++        self.calls.append(("list_in_review",))
++        return self._in_review
++
++
++class FakeGithubPlugin:
++    def __init__(self, existing_prs=None, create_result=None, create_error=None):
++        self._existing = existing_prs or {}
++        self._create_result = create_result or {"pr_number": 42, "url": "https://github.com/o/r/pull/42"}
++        self._create_error = create_error
++        self.calls = []
++
++    def find_pr_for_branch(self, branch):
++        self.calls.append(("find_pr_for_branch", branch))
++        return self._existing.get(branch)
++
++    def create_pr(self, title, head, base, body):
++        self.calls.append(("create_pr", title, head, base, body))
++        if self._create_error:
++            raise self._create_error
++        return self._create_result
++
+ 
+ class FakeLoadedPlugin:
+     def __init__(self, name, instance, error=None):
+@@ -131,6 +155,13 @@ def _manager_with_linear(plugin):
+     return FakeManager([FakeLoadedPlugin("linear", plugin)])
+ 
+ 
++def _manager_with_linear_and_github(linear_plugin, github_plugin):
++    return FakeManager([
++        FakeLoadedPlugin("linear", linear_plugin),
++        FakeLoadedPlugin("github", github_plugin),
++    ])
++
++
+ # ------------------------------------------------------------------ AC-1
+ 
+ def test_check_stuck_passes_recovers_stale_build_state(tmp_path):
+@@ -632,3 +663,93 @@ def test_recycle_stuck_issues_ignores_fresh_in_progress(tmp_path):
+     healer = SelfHealer(config, manager)
+ 
+     assert healer.recycle_stuck_issues() == []
++
++
++# ------------------------------------------------------------------ REA-120 AC-6
++
++def test_check_missing_prs_noop_without_github_plugin(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    config = _write_config(clone)
++    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-1", "title": "Some fix"}])
++    manager = _manager_with_linear(linear)
++    healer = SelfHealer(config, manager)
++
++    assert healer.check_missing_prs() == []
++    # never even asked Linear -- bails out before any lookup
++    assert ("list_in_review",) not in linear.calls
++
++
++def test_check_missing_prs_skips_when_pr_already_exists(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    config = _write_config(clone)
++    branch = "rea-1-some-fix"
++    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-1", "title": "Some fix"}])
++    github = FakeGithubPlugin(existing_prs={branch: {"pr_number": 7, "url": "x"}})
++    manager = _manager_with_linear_and_github(linear, github)
++    healer = SelfHealer(config, manager)
++
++    events = healer.check_missing_prs()
++
++    assert events == []
++    assert not any(c[0] == "create_pr" for c in github.calls)
++
++
++def test_check_missing_prs_skips_when_branch_not_pushed(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    config = _write_config(clone)
++    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-1", "title": "Never pushed"}])
++    github = FakeGithubPlugin()
++    manager = _manager_with_linear_and_github(linear, github)
++    healer = SelfHealer(config, manager)
++
++    events = healer.check_missing_prs()
++
++    assert events == []
++    assert not any(c[0] == "create_pr" for c in github.calls)
++
++
++def test_check_missing_prs_auto_creates_pr_for_stalled_handoff(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    config = _write_config(clone)
++    branch = "rea-1-some-fix"
++    _git(["checkout", "-b", branch], clone)
++    (clone / "extra.py").write_text("x = 1\n")
++    _git(["add", "-A"], clone)
++    _git(["commit", "-m", "wip"], clone)
++    _git(["push", "origin", branch], clone)
++
++    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-1", "title": "Some fix"}])
++    github = FakeGithubPlugin()
++    manager = _manager_with_linear_and_github(linear, github)
++    healer = SelfHealer(config, manager)
++
++    events = healer.check_missing_prs()
++
++    assert len(events) == 1
++    assert isinstance(events[0], PRCreated)
++    assert events[0].issue_id == "REA-1"
++    assert any(c[0] == "create_pr" and c[2] == branch for c in github.calls)
++    assert any(c[0] == "add_comment" and c[1] == "REA-1" for c in linear.calls)
++    assert manager.emitted and isinstance(manager.emitted[-1], PRCreated)
++
++
++def test_check_missing_prs_escalates_on_create_failure(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    config = _write_config(clone)
++    branch = "rea-1-some-fix"
++    _git(["checkout", "-b", branch], clone)
++    (clone / "extra.py").write_text("x = 1\n")
++    _git(["add", "-A"], clone)
++    _git(["commit", "-m", "wip"], clone)
++    _git(["push", "origin", branch], clone)
++
++    linear = FakeLinearPlugin(in_review=[{"identifier": "REA-1", "title": "Some fix"}])
++    github = FakeGithubPlugin(create_error=RuntimeError("boom"))
++    manager = _manager_with_linear_and_github(linear, github)
++    healer = SelfHealer(config, manager)
++
++    events = healer.check_missing_prs()
++
++    assert events == []
++    assert ("add_label", "REA-1", "needs-human-review") in linear.calls
++    assert any(c[0] == "add_comment" and c[1] == "REA-1" for c in linear.calls)
+diff --git a/tests/test_pass_engine.py b/tests/test_pass_engine.py
+index b98dbc0..981ef1a 100644
+--- a/tests/test_pass_engine.py
++++ b/tests/test_pass_engine.py
+@@ -128,6 +128,26 @@ def _manager_with(plugin):
+     return FakeManager([FakeLoadedPlugin("linear", plugin)])
+ 
+ 
++def _manager_with_github(linear_plugin, github_plugin):
++    return FakeManager([
++        FakeLoadedPlugin("linear", linear_plugin),
++        FakeLoadedPlugin("github", github_plugin),
++    ])
++
++
++class FakeGithubPlugin:
++    def __init__(self, create_result=None, create_error=None):
++        self._create_result = create_result or {"pr_number": 9, "url": "https://github.com/o/r/pull/9"}
++        self._create_error = create_error
++        self.calls = []
++
++    def create_pr(self, title, head, base, body):
++        self.calls.append(("create_pr", title, head, base, body))
++        if self._create_error:
++            raise self._create_error
++        return self._create_result
++
++
+ def _empty_manager():
+     return FakeManager([])
+ 
+@@ -331,6 +351,79 @@ def test_pass_end_build_pushes_branch_comments_and_moves_to_review(tmp_path):
+     assert code == 0 and "rea-3-ship-it" in out
+ 
+ 
++# --------------------------------------------------------------- REA-120
++
++def test_pass_end_build_opens_pr_when_github_plugin_configured(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    (clone / "loop.toml").write_text(
++        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++    )
++    config = load_config(str(clone))
++    linear = FakeLinearPlugin(ready=[{"identifier": "REA-3", "title": "Ship it", "url": "u"}])
++    github = FakeGithubPlugin()
++    manager = _manager_with_github(linear, github)
++    start_build(config, manager)
++
++    wt = pass_engine.worktree_path(config, "build")
++    with open(os.path.join(wt, "new_file.py"), "w") as f:
++        f.write("print('hi')\n")
++
++    result = pass_end("build", manager=manager, config=config, worktree=wt)
++
++    assert result["ok"] is True
++    assert result["pr_url"] == "https://github.com/o/r/pull/9"
++    assert any(c[0] == "create_pr" and c[2] == "rea-3-ship-it" for c in github.calls)
++    assert ("move_to_review", "REA-3") in linear.calls
++    comment_bodies = [c[2] for c in linear.calls if c[0] == "add_comment"]
++    assert any("PR opened" in body for body in comment_bodies)
++
++
++def test_pass_end_build_no_github_plugin_still_works_unchanged(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    (clone / "loop.toml").write_text(
++        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++    )
++    config = load_config(str(clone))
++    linear = FakeLinearPlugin(ready=[{"identifier": "REA-3", "title": "Ship it", "url": "u"}])
++    manager = _manager_with(linear)
++    start_build(config, manager)
++
++    wt = pass_engine.worktree_path(config, "build")
++    with open(os.path.join(wt, "new_file.py"), "w") as f:
++        f.write("print('hi')\n")
++
++    result = pass_end("build", manager=manager, config=config, worktree=wt)
++
++    assert result["ok"] is True
++    assert result["pr_url"] is None
++    assert ("move_to_review", "REA-3") in linear.calls
++
++
++def test_pass_end_build_raises_and_escalates_when_pr_creation_fails(tmp_path):
++    bare, clone = _init_bare_repo_with_clone(tmp_path)
++    (clone / "loop.toml").write_text(
++        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
++    )
++    config = load_config(str(clone))
++    linear = FakeLinearPlugin(ready=[{"identifier": "REA-3", "title": "Ship it", "url": "u"}])
++    github = FakeGithubPlugin(create_error=RuntimeError("api down"))
++    manager = _manager_with_github(linear, github)
++    start_build(config, manager)
++
++    wt = pass_engine.worktree_path(config, "build")
++    with open(os.path.join(wt, "new_file.py"), "w") as f:
++        f.write("print('hi')\n")
++
++    with pytest.raises(PassEngineError, match="GitHub PR creation failed"):
++        pass_end("build", manager=manager, config=config, worktree=wt)
++
++    # Not moved to review -- the issue must not claim in-review with no PR.
++    assert ("move_to_review", "REA-3") not in linear.calls
++    assert ("add_label", "REA-3", "needs-human-review") in linear.calls
++    # State file preserved so a retry/fix can re-invoke pass_end.
++    assert os.path.isfile(os.path.join(wt, ".loop.pass.json"))
++
++
+ def test_pass_end_build_role_mismatch_raises(tmp_path):
+     bare, clone = _init_bare_repo_with_clone(tmp_path)
+     (clone / "loop.toml").write_text(
