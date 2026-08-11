@@ -1,10 +1,32 @@
 # hermes-loop-r2
 
-A self-hosted, pluggable autonomous build/review daemon. One command — `loop serve` — replaces 10+ cron jobs, a gateway dependency, and manual queue management. Built in Python. Ships with plugins for Linear, GitHub, Slack, and more.
+A self-hosted, plugin-based reimplementation of the hermes-loop autonomous
+build/review pipeline. One command — `loop serve` — replaces 10+ cron
+jobs, a gateway dependency, and manual queue management. **Targets any
+directory** (not locked to one repo) via per-instance `loop.toml` config,
+and runs its own internal scheduler with **no external cron dependency.**
+Built in Python. Ships with plugins for Linear, GitHub, Slack, and more.
 
-**10 PRs merged. 11+ commits on main. The core engine is production-ready.**
+**Multiple PRs merged on main. The core engine is production-ready.**
 
 ## Architecture
+
+The daemon is a single process (`loop serve`) with these subsystems:
+
+| Subsystem | Module | Lines | What it does |
+|---|---|---|---|
+| **Scheduler** | `loop/scheduler.py` | 172 | Build/review tick loop driven by the internal timer |
+| **Pass engine** | `loop/pass_engine.py` | 472 | Worktree management, branch push, review verdict |
+| **Plugin manager** | `loop/plugin_manager.py` | 205 | Loads plugins from `plugins/` directory per loop.toml |
+| **Event bus** | `loop/events.py` | 282 | Typed pub-sub — daemon emits, plugins subscribe |
+| **Daemon (self-healer)** | `loop/daemon.py` | 664 | Stuck-pass recovery, plugin health, stall detection, dependency unblocking |
+| **Agent runner** | `loop/agent_runner.py` | 421 | Subprocess invocation of Hermes/Claude Code/Codex for cognitive work |
+| **CLI** | `loop/cli.py` | — | `loop serve`, `loop init`, `loop status`, `loop plugin` |
+| **Web UI** | `loop/webui.py` | 194 | Dashboard, issue viewer, pass controls (served on `:8765`) |
+| **Watcher** | `loop/watcher.py` | 134 | File-watch loop for `loop-eval` issue filing |
+| **Metrics** | `loop/metrics.py` | 97 | Prometheus-compatible metrics endpoint |
+| **Self-update** | `loop/self_update.py` | 200 | Git-fetch-based engine version check and in-place upgrade |
+| **Config** | `loop/config.py` | — | `loop.toml` parsing and validation |
 
 ```
 loop serve                    # single process
@@ -23,6 +45,51 @@ loop serve                    # single process
 ```
 
 No external cron jobs. No Hermes gateway dependency for scheduling. The daemon manages its own tick loop, recovers its own crashed passes, unblocks its own dependency chains, and serves its own admin UI.
+
+## Status
+
+**Early / in-progress.** This is a working prototype with the core engine
+implemented but not yet deployed as a production daemon. Below is an
+honest inventory against `main` as of the latest commit:
+
+### Implemented (on main)
+
+- Daemon process with self-healing: stuck-pass recovery, plugin health
+  monitoring, stall detection, empty-queue detection, dependency
+  unblocking (`loop/daemon.py`)
+- Internal scheduler with configurable tick intervals — no external cron
+  dependency (`loop/scheduler.py`)
+- Pass engine: worktree creation, branch management, rebase/squash/push
+  (`loop/pass_engine.py`)
+- Plugin system: init/start/stop/status lifecycle, event subscriptions,
+  interface validation (`loop/plugins/base.py`)
+- Five built-in plugins: Linear, GitHub, Slack, Discord, Log
+  (`loop/plugins/`)
+- Typed event bus with 15+ event types (`loop/events.py`)
+- CLI with `loop serve`, `loop init`, `loop status`, `loop plugin
+  list/validate` (`loop/cli.py`)
+- Web UI server: dark-themed status page at `/`, static-file server at
+  `/static/*`, and health endpoint at `/health` (`loop/webui.py`,
+  `webui/templates/`, `webui/static/`)
+- Agent runner: subprocess invocation of Hermes/Claude Code/Codex
+  (`loop/agent_runner.py`)
+- Config parsing and validation for `loop.toml` (`loop/config.py`)
+- File watcher for `loop-eval` issue filing (`loop/watcher.py`)
+- Prometheus metrics endpoint (`loop/metrics.py`)
+- Self-update engine via git fetch (`loop/self_update.py`)
+- Test suite: 17 test files covering daemon, plugins, pass engine,
+  scheduler, CLI, events, config (`tests/`)
+
+### Planned / not yet implemented
+
+- **Plugin hot-reload**: plugins must be reloaded by restarting the daemon
+- **Database-backed event store**: events are JSONL-only; no queryable
+  history
+- **Multi-instance orchestration**: `loop serve` runs one instance;
+  fleet management is not built yet
+- **Auth / access control** for the web UI
+- **Plugin marketplace / discovery**: plugins must be manually written and
+  placed in the `plugins/` directory
 
 ## Quick Start
 
@@ -195,6 +262,21 @@ loop-review reviews branch → approves → opens PR → automerges (if enabled)
        ↓
 issue Done → blocked dependents auto-unblock → next issue claimed
 ```
+
+## Differences from hermes-loop (r1)
+
+hermes-loop-r2 is a ground-up rewrite that addresses the architectural
+bottlenecks of the original hermes-loop engine:
+
+| Aspect | r1 | r2 |
+|---|---|---|
+| **Architecture** | Monolith — one engine repo with all logic hard-wired | Plugin architecture — engine provides lifecycle hooks; plugins supply integrations |
+| **Scheduling** | ~10 external cron jobs managed by Hermes Agent | Self-hosted internal scheduler (`loop/scheduler.py`) — one daemon, one timer |
+| **Process model** | One cron job per pipeline stage (build, review, automerge, watchdog, eval, …) | Single `loop serve` daemon process that drives all stages |
+| **Event system** | Ad-hoc watchdog prompts polling Linear/GitHub state | Typed event bus (`loop/events.py`) with pub-sub — plugins subscribe to state transitions |
+| **Config** | Hardcoded paths and repo references in engine source | Per-instance `loop.toml` — targets any directory, any repo, any Linear team |
+| **Healing** | External watchdog cron job detects stalls | Built-in self-healer: stuck-pass recovery, plugin health, stall detection, empty-queue detection |
+| **UI** | None — all state surfaced through Hermes terminal output | Web UI dashboard (`loop/webui.py`) with issue viewer and pass controls |
 
 ## Dev
 
