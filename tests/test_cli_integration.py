@@ -483,12 +483,12 @@ def test_status_with_explicit_config_offline(tmp_path, capsys):
 
 
 def test_serve_arg_defaults():
-    """loop serve has correct default arguments."""
+    """loop serve has correct default arguments (defer to config)."""
     from loop.cli import build_parser
     parser = build_parser()
     args = parser.parse_args(["serve"])
-    assert args.host == "0.0.0.0"
-    assert args.port == 8765
+    assert args.host is None
+    assert args.port is None
     assert args.schedule is None
 
 
