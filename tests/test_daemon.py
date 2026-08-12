@@ -768,3 +768,70 @@ def test_reconcile_stale_review_handoff_comments_when_pr_create_fails(tmp_path):
         c[0] == "add_comment" and c[1] == "REA-85" and "rate limited" in c[2]
         for c in linear.calls
     )
+
+
+# ── REA-108: Dashboard active-pass and recent-passes tracking ──────────
+
+
+def test_record_pass_started_and_ended(tmp_path) -> None:
+    """AC-2: active pass is set on start and cleared on end."""
+    _, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with()
+    healer = SelfHealer(config, manager, now_fn=lambda: 1000.0)
+
+    # Initially no active pass, no recent passes.
+    snap = healer.snapshot()
+    assert snap["active_pass"] is None
+    assert snap["recent_passes"] == []
+
+    # Start a pass.
+    healer.record_pass_started("build", "REA-99")
+    snap = healer.snapshot()
+    assert snap["active_pass"] == {"role": "build", "issue_id": "REA-99", "started_at": 1000.0}
+
+    # End it.
+    healer.record_pass_ended("build", "REA-99", "shipped", 2.5)
+    snap = healer.snapshot()
+    assert snap["active_pass"] is None
+    assert len(snap["recent_passes"]) == 1
+    rp = snap["recent_passes"][0]
+    assert rp["role"] == "build"
+    assert rp["issue_id"] == "REA-99"
+    assert rp["outcome"] == "shipped"
+    assert rp["duration_s"] == 2.5
+    assert "timestamp" in rp
+
+
+def test_recent_passes_ring_buffer_capped_at_20(tmp_path) -> None:
+    """AC-3: recent passes ring buffer holds at most 20 entries."""
+    _, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with()
+    healer = SelfHealer(config, manager, now_fn=lambda: 1000.0)
+
+    for i in range(25):
+        healer.record_pass_started("build", f"REA-{i}")
+        healer.record_pass_ended("build", f"REA-{i}", "shipped", 1.0)
+
+    snap = healer.snapshot()
+    assert len(snap["recent_passes"]) == 20
+    # Most recent 20: should start with REA-5 (index 5 through 24)
+    assert snap["recent_passes"][0]["issue_id"] == "REA-5"
+    assert snap["recent_passes"][-1]["issue_id"] == "REA-24"
+
+
+def test_dashboard_active_pass_elapsed_timestamp(tmp_path) -> None:
+    """AC-2: active pass started_at allows client to compute elapsed time."""
+    _, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with()
+    healer = SelfHealer(config, manager, now_fn=lambda: 5000.0)
+
+    healer.record_pass_started("review", "REA-100")
+    snap = healer.snapshot()
+    active = snap["active_pass"]
+    assert active is not None
+    assert active["issue_id"] == "REA-100"
+    assert active["role"] == "review"
+    assert active["started_at"] == 5000.0

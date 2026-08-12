@@ -201,6 +201,8 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
 
     issue_id = event.issue or ""
     worktree = _wtp(healer.config, "build")
+    start = time.monotonic()
+    healer.record_pass_started("build", issue_id)
 
     # Read the state file that start_build() wrote.
     try:
@@ -233,12 +235,15 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
     except (AgentTimeoutError, AgentCrashed) as e:
         print(f"[agent:{state_issue_id}] {e}", flush=True)
         # AC-7: abort — unassign the issue and recycle to the queue.
+        healer.record_pass_ended("build", state_issue_id, "failed", time.monotonic() - start)
         _abort_build_pass(healer, manager, worktree, state_issue_id, str(e))
         return
 
     # AC-7: only ship if the agent reports verify_passed.
     if not result.verify_passed:
         print(f"[agent:{state_issue_id}] verify failed, aborting", flush=True)
+        healer.record_pass_ended("build", state_issue_id, "failed",
+                                 time.monotonic() - start)
         _abort_build_pass(healer, manager, worktree, state_issue_id,
                           "agent reported verify_failed")
         return
@@ -249,7 +254,12 @@ def _run_agent_build_pass(healer: SelfHealer, manager: PluginManager, get_runner
                  worktree=worktree)
     except PassEngineError as e:
         print(f"[pass_engine] ship failed: {e}", flush=True)
+        healer.record_pass_ended("build", state_issue_id, "failed",
+                                 time.monotonic() - start)
         return
+
+    healer.record_pass_ended("build", state_issue_id, "shipped",
+                             time.monotonic() - start)
 
 
 def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runner) -> None:
@@ -280,6 +290,8 @@ def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runne
 
     from loop.pass_engine import worktree_path as _wtp
     worktree = _wtp(healer.config, "review")
+    start = time.monotonic()
+    healer.record_pass_started("review", event.issue or "")
 
     try:
         from loop.pass_engine import read_state as _rs
@@ -313,6 +325,8 @@ def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runne
         result = runner.run_review(worktree, agent_issue, branch, on_event, timeout_s)
     except (AgentTimeoutError, AgentCrashed) as e:
         print(f"[agent:{issue_id}] {e}", flush=True)
+        healer.record_pass_ended("review", issue_id, "crashed",
+                                 time.monotonic() - start)
         try:
             pass_end("review", manager=manager, config=healer.config,
                      worktree=worktree, outcome="changes_requested",
@@ -327,6 +341,12 @@ def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runne
                  comment="\n".join(result.must_fix_findings) if result.must_fix_findings else None)
     except PassEngineError as e:
         print(f"[pass_engine] review pass_end failed: {e}", flush=True)
+        healer.record_pass_ended("review", issue_id, "failed",
+                                 time.monotonic() - start)
+        return
+
+    healer.record_pass_ended("review", issue_id, result.verdict,
+                             time.monotonic() - start)
 
 
 def _abort_build_pass(healer: SelfHealer, manager: PluginManager,
@@ -434,7 +454,9 @@ def cmd_serve(args) -> int:
     webui = WebUIServer(host=args.host if args.host is not None else config.webui.host,
                         port=args.port if args.port is not None else config.webui.port,
                         health_provider=lambda: healer.snapshot(worker_pool),
-                        metrics_provider=make_metrics_provider(healer.snapshot), project_root=os.getcwd())
+                        metrics_provider=make_metrics_provider(healer.snapshot),
+                        dashboard_provider=healer.snapshot,
+                        project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
         version=__version__, plugins=[lp.name for lp in manager.plugins], timestamp=datetime.now(),

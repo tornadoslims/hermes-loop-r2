@@ -19,6 +19,11 @@ from typing import Any, Callable, Dict, Optional
 # args, returns a JSON-serializable dict shaped per REA-89 AC-5.
 HealthProvider = Callable[[], Dict[str, Any]]
 
+# Type of the callback WebUIServer calls on every GET /api/dashboard:
+# takes no args, returns a JSON-serializable dict with queue depth,
+# active pass, recent passes, and plugin health (REA-108).
+DashboardProvider = Callable[[], Dict[str, Any]]
+
 # Cache the MIME type lookup so we don't re-init every request.
 _mimetypes_initialized = False
 
@@ -41,6 +46,7 @@ def _guess_mime(path: str) -> str:
 def _make_handler(
     health_provider: Optional[HealthProvider],
     metrics_provider: Optional[Callable[[], bytes]],
+    dashboard_provider: Optional[DashboardProvider],
     static_dir: str,
     templates_dir: str,
 ):
@@ -49,6 +55,11 @@ def _make_handler(
             # /health — machine-readable JSON (unchanged from REA-89)
             if self.path == "/health" and health_provider is not None:
                 self._respond_json(health_provider())
+                return
+
+            # /api/dashboard — dashboard data JSON (REA-108)
+            if self.path == "/api/dashboard" and dashboard_provider is not None:
+                self._respond_json(dashboard_provider())
                 return
 
             # /metrics — Prometheus exposition format (REA-127)
@@ -162,12 +173,14 @@ class WebUIServer:
         port: int = 8765,
         health_provider: Optional[HealthProvider] = None,
         metrics_provider: Optional[Callable[[], bytes]] = None,
+        dashboard_provider: Optional[DashboardProvider] = None,
         project_root: Optional[str] = None,
     ):
         self.host = host
         self.port = port
         self.health_provider = health_provider
         self.metrics_provider = metrics_provider
+        self.dashboard_provider = dashboard_provider
         self._project_root = project_root or os.getcwd()
         self._httpd: Optional[http.server.HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -182,7 +195,8 @@ class WebUIServer:
 
     def start(self) -> None:
         handler = _make_handler(
-            self.health_provider, self.metrics_provider, self.static_dir, self.templates_dir
+            self.health_provider, self.metrics_provider, self.dashboard_provider,
+            self.static_dir, self.templates_dir
         )
         self._httpd = http.server.HTTPServer((self.host, self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)

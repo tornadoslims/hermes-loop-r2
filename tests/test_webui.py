@@ -236,3 +236,99 @@ def test_template_missing_vars_renders_gracefully() -> None:
     # "running" and "0.1.0" are the default substitutions; unreplaced
     # placeholders would appear as "${...}", which should NOT appear.
     assert "${" not in text
+
+# ── REA-108: /api/dashboard ────────────────────────────────────────────
+
+
+class _ServerFixtureForDashboard:
+    """Like _ServerFixture but with a dashboard_provider."""
+
+    def __init__(self, project_root: str, snapshot):
+        self.project_root = project_root
+        self.snapshot = snapshot
+        self.port = _free_port()
+        self.server: WebUIServer | None = None
+
+    def __enter__(self):
+        self.server = WebUIServer(
+            host="127.0.0.1",
+            port=self.port,
+            health_provider=lambda: self.snapshot,
+            dashboard_provider=lambda: self.snapshot,
+            project_root=self.project_root,
+        )
+        self.server.start()
+        time.sleep(0.1)
+        return self
+
+    def __exit__(self, *args):
+        if self.server:
+            self.server.stop()
+
+    def url(self, path: str = "/") -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+
+def test_dashboard_api_returns_json() -> None:
+    """AC-1/AC-4: /api/dashboard returns valid JSON with expected sections."""
+    fake_snapshot = {
+        "uptime_seconds": 120.0,
+        "passes_completed": 3,
+        "passes_failed": 1,
+        "last_pass_duration": 2.1,
+        "plugins": {"linear": {"healthy": True}, "github": {"healthy": False, "error": "token missing"}},
+        "queue_depth": 5,
+        "last_pass_at": "2026-08-11T12:00:00Z",
+        "active_pass": {"role": "build", "issue_id": "REA-99", "started_at": 1723300000.0},
+        "recent_passes": [
+            {"role": "build", "issue_id": "REA-97", "outcome": "shipped", "duration_s": 2.5, "timestamp": "2026-08-11T11:50:00"},
+        ],
+    }
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixtureForDashboard(root, fake_snapshot) as srv:
+        status, body, ct = _read_url(srv.url("/api/dashboard"))
+
+    assert status == 200
+    assert "application/json" in ct
+    data = json.loads(body)
+    assert data["queue_depth"] == 5
+    assert data["active_pass"]["issue_id"] == "REA-99"
+    assert data["active_pass"]["role"] == "build"
+    assert len(data["recent_passes"]) == 1
+    assert data["recent_passes"][0]["outcome"] == "shipped"
+    assert data["plugins"]["linear"]["healthy"] is True
+    assert data["plugins"]["github"]["healthy"] is False
+
+
+def test_dashboard_api_no_active_pass_returns_none() -> None:
+    """AC-2: when no pass is active, active_pass is null."""
+    fake_snapshot = {
+        "uptime_seconds": 60.0,
+        "passes_completed": 0,
+        "passes_failed": 0,
+        "last_pass_duration": 0.0,
+        "plugins": {},
+        "queue_depth": 0,
+        "last_pass_at": None,
+        "active_pass": None,
+        "recent_passes": [],
+    }
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixtureForDashboard(root, fake_snapshot) as srv:
+        status, body, ct = _read_url(srv.url("/api/dashboard"))
+
+    assert status == 200
+    data = json.loads(body)
+    assert data["active_pass"] is None
+    assert data["recent_passes"] == []
+    assert data["queue_depth"] == 0
+
+
+def test_dashboard_api_absent_when_no_provider() -> None:
+    """When no dashboard_provider is set, /api/dashboard should 404."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, health_provider=lambda: {}) as srv:
+        status, _, _ = _read_url(srv.url("/api/dashboard"))
+    assert status == 404
