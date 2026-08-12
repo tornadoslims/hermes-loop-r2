@@ -1,4 +1,4 @@
-"""Tests for loop.plugins.discord (REA-124)."""
+"""Tests for loop.plugins.discord (REA-106)."""
 import os
 from datetime import datetime
 from unittest import mock
@@ -16,8 +16,7 @@ from loop.events import (
     QueueEmpty,
     RecoveryEvent,
 )
-from loop.plugin_manager import PluginInterfaceError
-from loop.plugins.discord import DiscordPlugin, _format_message
+from loop.plugins.discord import DiscordPlugin, _build_embed
 
 
 # -- Helpers ----------------------------------------------------------------
@@ -50,134 +49,120 @@ def test_implements_all_abstract_methods():
     p = DiscordPlugin()
     p.init({"webhook_url": "https://discord.com/api/webhooks/X"})
     assert p.status()["webhook_configured"] is True
+    assert p.status()["enabled"] is True
     p.start()
     assert p.status()["started"] is True
     p.stop()
     assert p.status()["started"] is False
 
 
-# -- AC-2: webhook URL resolution -------------------------------------------
+# -- AC-2: embed formatting -------------------------------------------------
 
 
-def test_init_reads_webhook_url_from_config():
-    """AC-2: config[webhook_url] is preferred."""
-    p = DiscordPlugin()
-    p.init({"webhook_url": "https://discord.com/api/webhooks/A"})
-    assert p._webhook_url == "https://discord.com/api/webhooks/A"
-
-
-def test_init_falls_back_to_env_var():
-    """AC-2: DISCORD_WEBHOOK_URL used when config has no webhook_url."""
-    p = DiscordPlugin()
-    with mock.patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/B"}):
-        p.init({})
-    assert p._webhook_url == "https://discord.com/api/webhooks/B"
-
-
-def test_init_config_wins_over_env():
-    """AC-2: config[webhook_url] overrides DISCORD_WEBHOOK_URL."""
-    p = DiscordPlugin()
-    with mock.patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/ENV"}):
-        p.init({"webhook_url": "https://discord.com/api/webhooks/CFG"})
-    assert p._webhook_url == "https://discord.com/api/webhooks/CFG"
-
-
-def test_init_raises_when_no_webhook_anywhere():
-    """AC-2: missing both config and env raises PluginInterfaceError."""
-    p = DiscordPlugin()
-    with mock.patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(PluginInterfaceError, match="webhook URL not configured"):
-            p.init({})
-
-
-def test_init_raises_at_init_not_first_post():
-    """AC-2: error happens at init(), not when first event arrives."""
-    p = DiscordPlugin()
-    with mock.patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(PluginInterfaceError):
-            p.init({})
-    assert p._webhook_url is None
-
-
-# -- AC-3: event subscription and message formatting ------------------------
-
-
-def test_format_pass_started():
-    msg = _format_message(
-        PassStarted(role="build", issue_id="REA-124", timestamp=datetime.now())
+def test_build_embed_pass_started():
+    embed = _build_embed(
+        PassStarted(role="build", issue_id="REA-106", timestamp=datetime.now())
     )
-    assert msg == "[hermes-loop-r2] `build` started `REA-124`"
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Pass Started"
+    assert "build" in embed["description"]
+    assert "REA-106" in embed["description"]
+    assert embed["color"] == 3447003  # blue
+    assert "timestamp" in embed
+    assert any(f["name"] == "Role" for f in embed["fields"])
+    assert any(f["name"] == "Issue" for f in embed["fields"])
 
 
-def test_format_pass_completed():
-    msg = _format_message(
+def test_build_embed_pass_completed():
+    embed = _build_embed(
         PassCompleted(
-            role="build", issue_id="REA-124", outcome="ship",
+            role="build", issue_id="REA-106", outcome="ship",
             duration_s=12.5, timestamp=datetime.now(),
         )
     )
-    assert msg == "[hermes-loop-r2] `build` finished `REA-124` (ship, 12.5s)"
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Pass Completed"
+    assert embed["color"] == 5763719  # green
+    assert any(f["name"] == "Outcome" for f in embed["fields"])
+    assert any(f["name"] == "Duration" for f in embed["fields"])
 
 
-def test_format_pass_failed():
-    msg = _format_message(
+def test_build_embed_pass_failed():
+    embed = _build_embed(
         PassFailed(
-            role="build", issue_id="REA-124",
+            role="build", issue_id="REA-106",
             error="preflight failed: missing API key", timestamp=datetime.now(),
         )
     )
-    assert "[hermes-loop-r2] `build` FAILED `REA-124`" in (msg or "")
-    assert "preflight failed: missing API key" in (msg or "")
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Pass FAILED"
+    assert embed["color"] == 15548997  # red
+    assert "missing API key" in str(embed)
 
 
-def test_format_daemon_started():
-    msg = _format_message(
-        DaemonStarted(version="0.2.0", plugins=["linear", "github"], timestamp=datetime.now())
+def test_build_embed_daemon_started():
+    embed = _build_embed(
+        DaemonStarted(version="0.2.0", plugins=["linear", "discord"], timestamp=datetime.now())
     )
-    assert "[hermes-loop-r2] daemon started (v0.2.0, plugins: linear, github)" in (msg or "")
+    assert embed is not None
+    assert "v0.2.0" in embed["description"]
+    assert "linear, discord" in embed["description"]
 
 
-def test_format_daemon_started_no_plugins():
-    msg = _format_message(
+def test_build_embed_daemon_started_no_plugins():
+    embed = _build_embed(
         DaemonStarted(version="0.1.0", plugins=[], timestamp=datetime.now())
     )
-    assert "plugins: none" in (msg or "")
+    assert embed is not None
+    assert "plugins: none" in embed["description"]
 
 
-def test_format_daemon_stopping():
-    msg = _format_message(
+def test_build_embed_daemon_stopping():
+    embed = _build_embed(
         DaemonStopping(reason="SIGTERM", timestamp=datetime.now())
     )
-    assert msg == "[hermes-loop-r2] daemon stopping — SIGTERM"
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Daemon Stopping"
+    assert embed["color"] == 15105570  # orange
+    assert "SIGTERM" in embed["description"]
 
 
-def test_format_queue_empty():
-    msg = _format_message(
+def test_build_embed_queue_empty():
+    embed = _build_embed(
         QueueEmpty(tick_count=42, timestamp=datetime.now())
     )
-    assert msg == "[hermes-loop-r2] queue empty (tick #42)"
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Queue Empty"
+    assert embed["color"] == 10197915  # gray
+    assert "42" in embed["description"]
 
 
-def test_format_recovery_event():
-    msg = _format_message(
+def test_build_embed_recovery_event():
+    embed = _build_embed(
         RecoveryEvent(
             role="build", issue_id="REA-99",
             reason="stale lock (12h idle)", timestamp=datetime.now(),
         )
     )
-    assert "recovered stuck pass: `build` on `REA-99`" in (msg or "")
+    assert embed is not None
+    assert embed["title"] == "[hermes-loop-r2] Stuck Pass Recovered"
+    assert embed["color"] == 16776960  # yellow
+    assert "stale lock" in embed["description"]
 
 
-def test_format_unknown_event_returns_none():
+def test_build_embed_unknown_event_returns_none():
     """Unsubscribed event types (e.g. PRCreated) return None."""
-    msg = _format_message(
+    embed = _build_embed(
         PRCreated(issue_id="REA-1", pr_number="42", url="http://example.com", timestamp=datetime.now())
     )
-    assert msg is None
+    assert embed is None
 
 
-def test_on_event_posts_to_discord():
-    """AC-3: on_event posts to the webhook via _post_to_discord."""
+# -- AC-2 (cont'd): on_event posts embeds -----------------------------------
+
+
+def test_on_event_posts_embed_to_discord():
+    """AC-2: on_event posts an embed payload via _post_to_discord."""
     p = _started_plugin()
     event = PassStarted(role="review", issue_id="REA-50", timestamp=datetime.now())
 
@@ -199,7 +184,7 @@ def test_on_event_posts_to_discord():
     RecoveryEvent,
 ])
 def test_on_event_posts_for_each_subscribed_type(event_class):
-    """AC-3: a message is sent for each subscribed event type."""
+    """AC-2: an embed is sent for each subscribed event type."""
     p = _started_plugin()
 
     kwargs = {}
@@ -228,7 +213,7 @@ def test_on_event_posts_for_each_subscribed_type(event_class):
 
 
 def test_on_event_ignores_unsubscribed_types():
-    """AC-3: events not in the subscribed set are silently ignored."""
+    """Unsubscribed event types are silently ignored."""
     p = _started_plugin()
     event = PRCreated(issue_id="REA-1", pr_number="42", url="http://x.com", timestamp=datetime.now())
     with _mock_post_ok():
@@ -245,12 +230,73 @@ def test_on_event_ignores_when_not_started():
     assert p._last_post is None
 
 
-# -- AC-4: network failure handling -----------------------------------------
+# -- AC-3: enable/disable + webhook URL resolution --------------------------
+
+
+def test_init_reads_webhook_url_from_config():
+    """AC-3: config[webhook_url] is preferred."""
+    p = DiscordPlugin()
+    p.init({"webhook_url": "https://discord.com/api/webhooks/A"})
+    assert p._webhook_url == "https://discord.com/api/webhooks/A"
+    assert p._enabled is True
+
+
+def test_init_falls_back_to_env_var():
+    """AC-3: DISCORD_WEBHOOK_URL used when config has no webhook_url."""
+    p = DiscordPlugin()
+    with mock.patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/B"}):
+        p.init({})
+    assert p._webhook_url == "https://discord.com/api/webhooks/B"
+    assert p._enabled is True
+
+
+def test_init_config_wins_over_env():
+    """AC-3: config[webhook_url] overrides DISCORD_WEBHOOK_URL."""
+    p = DiscordPlugin()
+    with mock.patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/ENV"}):
+        p.init({"webhook_url": "https://discord.com/api/webhooks/CFG"})
+    assert p._webhook_url == "https://discord.com/api/webhooks/CFG"
+
+
+def test_init_explicit_disable():
+    """AC-3: enabled=false disables plugin without raising."""
+    p = DiscordPlugin()
+    p.init({"webhook_url": "https://discord.com/api/webhooks/X", "enabled": False})
+    assert p._enabled is False
+    assert p.status()["enabled"] is False
+
+
+# -- AC-4: fail closed — missing webhook logs warning, doesn't crash --------
+
+
+def test_init_disables_on_missing_webhook():
+    """AC-4: missing webhook URL disables plugin with a warning, no crash."""
+    p = DiscordPlugin()
+    with mock.patch.dict(os.environ, {}, clear=True):
+        p.init({})
+    assert p._enabled is False
+    assert p._webhook_url is None
+    assert p.status()["enabled"] is False
+    assert p.status()["webhook_configured"] is False
+
+
+def test_init_disabling_does_not_raise():
+    """AC-4: missing webhook should NEVER raise — daemon must stay up."""
+    p = DiscordPlugin()
+    with mock.patch.dict(os.environ, {}, clear=True):
+        p.init({})  # Must not raise
+    # on_event is a no-op when disabled
+    with _mock_post_ok():
+        p.start()
+        p.on_event(PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now()))
+    assert p._last_post is None  # disabled, so no post attempted
+
+
+# -- AC-4 (cont'd): network failure handling --------------------------------
 
 
 def test_network_failure_caught_and_logged(caplog):
-    """AC-4: a webhook POST failure is caught, logged, and reflected in
-    status() without raising."""
+    """AC-4: a webhook POST failure is caught, logged, reflected in status()."""
     p = _started_plugin()
     event = PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now())
 
@@ -279,26 +325,27 @@ def test_network_failure_does_not_stop_daemon():
     assert p._last_post["outcome"] == "failure"
 
 
-# -- AC-5: status reporting -------------------------------------------------
+# -- Status reporting -------------------------------------------------------
 
 
 def test_status_reports_webhook_configured():
-    """AC-5: status() shows whether webhook is configured."""
+    """status() shows whether webhook is configured."""
     p = DiscordPlugin()
     assert p.status()["webhook_configured"] is False
     p.init({"webhook_url": "https://discord.com/api/webhooks/X"})
     assert p.status()["webhook_configured"] is True
+    assert p.status()["enabled"] is True
 
 
 def test_status_reports_last_post_none_initially():
-    """AC-5: before any events, last_post is absent."""
+    """Before any events, last_post is absent."""
     p = DiscordPlugin()
     p.init({"webhook_url": "https://discord.com/api/webhooks/X"})
     assert "last_post" not in p.status()
 
 
 def test_status_reports_last_post_after_event():
-    """AC-5: after an event, status includes last post timestamp + outcome."""
+    """After an event, status includes last post timestamp + outcome."""
     p = _started_plugin()
     event = PassStarted(role="build", issue_id="REA-1", timestamp=datetime.now())
 
@@ -313,11 +360,19 @@ def test_status_reports_last_post_after_event():
 
 
 def test_status_reports_started_flag():
-    """AC-5: status() reports the started flag."""
+    """status() reports the started flag."""
     p = DiscordPlugin()
     p.init({"webhook_url": "https://discord.com/api/webhooks/X"})
     assert p.status()["started"] is False
     p.start()
     assert p.status()["started"] is True
     p.stop()
+    assert p.status()["started"] is False
+
+
+def test_status_reports_disabled_state():
+    """status() reports enabled flag from init config."""
+    p = DiscordPlugin()
+    p.init({"enabled": False})
+    assert p.status()["enabled"] is False
     assert p.status()["started"] is False
