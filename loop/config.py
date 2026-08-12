@@ -440,3 +440,128 @@ def load_config(path: str | None = None) -> Config:
         self_update=self_update,
         linear=linear,
     )
+
+
+# ------------------------------------------------------------------ plugin config schemas (REA-111)
+
+
+# Per-plugin field schemas: field_name -> {type, secret, description}
+# Types: "string", "boolean", "integer"
+_PLUGIN_SCHEMAS: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "linear": {
+        "api_key": {"type": "string", "secret": True, "description": "Linear API key"},
+        "team_key": {"type": "string", "secret": False, "description": "Team key (e.g. REA)"},
+        "project": {"type": "string", "secret": False, "description": "Project name"},
+    },
+    "discord": {
+        "webhook_url": {"type": "string", "secret": True, "description": "Discord webhook URL"},
+        "enabled": {"type": "boolean", "secret": False, "description": "Enable/disable plugin"},
+    },
+    "github": {
+        "repo": {"type": "string", "secret": False, "description": "GitHub repository (owner/repo)"},
+        "token": {"type": "string", "secret": True, "description": "GitHub personal access token"},
+    },
+    "slack": {
+        "webhook_url": {"type": "string", "secret": True, "description": "Slack webhook URL"},
+        "enabled": {"type": "boolean", "secret": False, "description": "Enable/disable plugin"},
+    },
+}
+
+
+def plugin_config_schema(plugin_name: str) -> Dict[str, Dict[str, Any]]:
+    """Return the config field schema for a plugin, or {} if unknown."""
+    return _PLUGIN_SCHEMAS.get(plugin_name, {})
+
+
+def validate_plugin_config(plugin_name: str, config: Dict[str, Any]) -> List[str]:
+    """Validate plugin config values against the schema. Returns a list of
+    error messages (empty list means valid)."""
+    schema = _PLUGIN_SCHEMAS.get(plugin_name, {})
+    errors: List[str] = []
+
+    for field_name, value in config.items():
+        field_schema = schema.get(field_name)
+        if field_schema is None:
+            errors.append(f"unknown field '{field_name}' for plugin '{plugin_name}'")
+            continue
+
+        expected_type = field_schema["type"]
+        if expected_type == "boolean":
+            if not isinstance(value, bool):
+                errors.append(
+                    f"field '{field_name}' must be a boolean, got {type(value).__name__!r}"
+                )
+        elif expected_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                errors.append(
+                    f"field '{field_name}' must be an integer, got {type(value).__name__!r}"
+                )
+        elif expected_type == "string":
+            if not isinstance(value, str):
+                errors.append(
+                    f"field '{field_name}' must be a string, got {type(value).__name__!r}"
+                )
+
+    return errors
+
+
+def write_plugin_config(
+    toml_path: str, plugin_name: str, config: Dict[str, Any]
+) -> None:
+    """Write plugin config values back to loop.toml.
+
+    Reads the current file, finds the ``[plugins.config.<plugin_name>]``
+    section, replaces its content with the new key-value pairs, and writes
+    the file back. Raises ConfigError if the section header is not found.
+    """
+    if not os.path.isfile(toml_path):
+        raise ConfigError(f"loop.toml not found at {toml_path!r}")
+
+    with open(toml_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    section_header = f"[plugins.config.{plugin_name}]"
+    header_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == section_header:
+            header_idx = i
+            break
+
+    if header_idx is None:
+        raise ConfigError(
+            f"section {section_header!r} not found in {toml_path!r}"
+        )
+
+    # Find the end of this section: next non-blank, non-comment line
+    # that starts with '[' at column 0, or EOF.
+    end_idx = len(lines)
+    for i in range(header_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped == "" or stripped.startswith("#"):
+            continue
+        if stripped.startswith("["):
+            end_idx = i
+            break
+
+    # Build the replacement lines: header + blank + key=value pairs
+    new_lines = [f"{section_header}\n"]
+    for key, value in config.items():
+        if isinstance(value, bool):
+            new_lines.append(f"{key} = {'true' if value else 'false'}\n")
+        elif isinstance(value, str):
+            new_lines.append(f'{key} = "{value}"\n')
+        elif isinstance(value, (int, float)):
+            new_lines.append(f"{key} = {value}\n")
+        else:
+            new_lines.append(f'{key} = "{value}"\n')
+
+    # Add a trailing blank line if the next section needs separation
+    if end_idx < len(lines) and lines[end_idx].strip() != "":
+        new_lines.append("\n")
+
+    # Replace the section
+    new_content = lines[:header_idx] + new_lines + lines[end_idx:]
+
+    with open(toml_path, "w", encoding="utf-8") as f:
+        f.writelines(new_content)

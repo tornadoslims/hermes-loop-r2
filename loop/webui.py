@@ -29,6 +29,14 @@ DashboardProvider = Callable[[], Dict[str, Any]]
 # args, returns a list of issue dicts (REA-109 AC-1-AC-2).
 IssueProvider = Callable[[], List[Dict[str, Any]]]
 
+# Type of the callback WebUIServer calls on GET /api/plugins: takes no
+# args, returns a JSON-serializable dict with plugin config data (REA-111).
+PluginConfigProvider = Callable[[], Dict[str, Any]]
+
+# Type of the callback WebUIServer calls on POST /api/plugins/save:
+# takes (plugin_name, config) and returns (ok, errors) (REA-111).
+PluginConfigSaver = Callable[[str, Dict[str, Any]], tuple]
+
 # Cache the MIME type lookup so we don't re-init every request.
 _mimetypes_initialized = False
 
@@ -90,6 +98,8 @@ def _make_handler(
     metrics_provider: Optional[Callable[[], bytes]],
     dashboard_provider: Optional[DashboardProvider],
     issues_provider: Optional[IssueProvider],
+    plugin_config_provider: Optional[PluginConfigProvider],
+    plugin_config_saver: Optional[PluginConfigSaver],
     static_dir: str,
     templates_dir: str,
 ):
@@ -120,6 +130,11 @@ def _make_handler(
                 self._respond_json(grouped)
                 return
 
+            # /api/plugins - plugin config data (REA-111 AC-1)
+            if self.path == "/api/plugins" and plugin_config_provider is not None:
+                self._respond_json(plugin_config_provider())
+                return
+
             # /static/* - serve static assets
             if self.path.startswith("/static/"):
                 self._serve_static(self.path[len("/static/"):])
@@ -145,9 +160,44 @@ def _make_handler(
             self.end_headers()
             self.wfile.write(b"Not Found")
 
-        def _respond_json(self, payload: Dict[str, Any]) -> None:
+        def do_POST(self):  # noqa: N802 - required signature name
+            # /api/plugins/save - save plugin config (REA-111 AC-2, AC-4)
+            if self.path == "/api/plugins/save" and plugin_config_saver is not None:
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError:
+                    self._respond_json({"ok": False, "errors": ["Invalid JSON body"]}, 400)
+                    return
+                plugin_name = payload.get("plugin", "")
+                config = payload.get("config", {})
+                if not plugin_name:
+                    self._respond_json({"ok": False, "errors": ["Missing 'plugin' field"]}, 400)
+                    return
+                if not isinstance(config, dict):
+                    self._respond_json({"ok": False, "errors": ["'config' must be an object"]}, 400)
+                    return
+                try:
+                    ok, errors = plugin_config_saver(plugin_name, config)
+                except Exception as e:
+                    self._respond_json({"ok": False, "errors": [str(e)]}, 500)
+                    return
+                if ok:
+                    self._respond_json({"ok": True})
+                else:
+                    self._respond_json({"ok": False, "errors": errors}, 400)
+                return
+
+            # Fallback 404 for unknown POST paths
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+
+        def _respond_json(self, payload: Dict[str, Any], status: int = 200) -> None:
             body = json.dumps(payload).encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -230,6 +280,8 @@ class WebUIServer:
         metrics_provider: Optional[Callable[[], bytes]] = None,
         dashboard_provider: Optional[DashboardProvider] = None,
         issues_provider: Optional[IssueProvider] = None,
+        plugin_config_provider: Optional[PluginConfigProvider] = None,
+        plugin_config_saver: Optional[PluginConfigSaver] = None,
         project_root: Optional[str] = None,
     ):
         self.host = host
@@ -238,6 +290,8 @@ class WebUIServer:
         self.metrics_provider = metrics_provider
         self.dashboard_provider = dashboard_provider
         self.issues_provider = issues_provider
+        self.plugin_config_provider = plugin_config_provider
+        self.plugin_config_saver = plugin_config_saver
         self._project_root = project_root or os.getcwd()
         self._httpd: Optional[http.server.HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -256,6 +310,8 @@ class WebUIServer:
             self.metrics_provider,
             self.dashboard_provider,
             self.issues_provider,
+            self.plugin_config_provider,
+            self.plugin_config_saver,
             self.static_dir,
             self.templates_dir,
         )
