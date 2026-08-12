@@ -176,10 +176,10 @@ class HermesRunner(_BaseCLIRunner):
         prompt = _build_prompt(issue)
         proc = self._run_cli(
             [
-                self.binary, "run",
-                "--no-confirm",
-                "--prompt", prompt,
-                "--workdir", worktree,
+                self.binary,
+                "--yolo",
+                "-z", prompt,
+                "--in", worktree,
             ],
             worktree, on_event, timeout_s, "hermes",
         )
@@ -197,10 +197,10 @@ class HermesRunner(_BaseCLIRunner):
         prompt = _review_prompt(issue, branch)
         proc = self._run_cli(
             [
-                self.binary, "run",
-                "--no-confirm",
-                "--prompt", prompt,
-                "--workdir", worktree,
+                self.binary,
+                "--yolo",
+                "-z", prompt,
+                "--in", worktree,
             ],
             worktree, on_event, timeout_s, "hermes-review",
         )
