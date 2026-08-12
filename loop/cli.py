@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from loop import __version__
-from loop.config import Config, ConfigError, load_config
+from loop.config import Config, ConfigError, find_loop_toml, load_config
 from loop.daemon import SelfHealer
 from loop.events import DaemonStarted, DaemonStopping, PassCompleted, PassFailed, PassStarted
 from loop.plugin_manager import PluginInterfaceError, PluginLoadError, PluginManager
@@ -692,8 +692,65 @@ def _format_uptime(seconds: float) -> str:
     return " ".join(parts)
 
 
+def _cmd_status_offline(args) -> int:
+    """Fallback: daemon is unreachable. Load config and report 'stopped'."""
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        # --config not provided -- try to discover it from cwd.
+        try:
+            _ = find_loop_toml()
+            config_path = "."
+        except ConfigError:
+            pass
+    if config_path is None:
+        print("daemon not running and no loop.toml found -- cannot report status",
+              file=sys.stderr)
+        return 1
+
+    try:
+        config = load_config(config_path)
+    except ConfigError as e:
+        print(f"cannot read config: {e}", file=sys.stderr)
+        return 1
+
+    print("daemon:         stopped")
+
+    # Try to load plugins and query Linear for queue depth.
+    manager = PluginManager(config)
+    queue_depth_str = "unknown (daemon not running)"
+    try:
+        manager.discover(validate_only=True)
+        from loop.pass_engine import _linear_plugin
+        linear = _linear_plugin(manager)
+        ready = linear.list_ready(log=lambda _: None)
+        queue_depth_str = str(len(ready))
+    except Exception:
+        pass
+
+    print(f"queue depth:    {queue_depth_str}")
+    print("last pass:      none")
+
+    # Report configured plugins (discovered, not started).
+    try:
+        report = manager.status_report()
+        if report:
+            names = [lp["name"] for lp in report]
+            print(f"plugins:        {len(names)} configured ({', '.join(names)})")
+        else:
+            print("plugins:        none configured")
+    except Exception:
+        print("plugins:        unknown")
+
+    return 0
+
+
 def cmd_status(args) -> int:
-    """GET /health on the running daemon and print a human-readable summary."""
+    """GET /health on the running daemon and print a human-readable summary.
+
+    When the daemon is unreachable and ``--config`` was provided (or a
+    loop.toml can be discovered from cwd), falls back to an offline mode
+    that reports the daemon as stopped along with available config info.
+    """
     url = f"http://{args.host}:{args.port}/health"
     req = urllib.request.Request(url)
     req.add_header("Accept", "application/json")
@@ -702,14 +759,14 @@ def cmd_status(args) -> int:
         resp = urllib.request.urlopen(req, timeout=5)
     except urllib.error.URLError as e:
         print(f"daemon not running at {url} ({e.reason})", file=sys.stderr)
-        return 1
+        return _cmd_status_offline(args)
     except OSError as e:
         print(f"daemon not running at {url} ({e})", file=sys.stderr)
-        return 1
+        return _cmd_status_offline(args)
 
     if resp.status != 200:
         print(f"daemon not running at {url} (HTTP {resp.status})", file=sys.stderr)
-        return 1
+        return _cmd_status_offline(args)
 
     data = json.loads(resp.read())
 
@@ -795,6 +852,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("status", help="query the running daemon's /health endpoint")
+    p.add_argument("--config", default=None, help="path to loop.toml or its directory (for offline mode)")
     p.add_argument("--host", default="localhost", help="daemon host (default: localhost)")
     p.add_argument("--port", type=int, default=8765, help="daemon port (default: 8765)")
     p.set_defaults(func=cmd_status)

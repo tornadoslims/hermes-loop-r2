@@ -413,13 +413,24 @@ def test_status_parses_health_payload(tmp_path, capsys):
 
 
 def test_status_daemon_not_running(tmp_path, capsys):
-    """loop status against a closed port reports daemon-not-running and exits
-    non-zero."""
+    """When the daemon is unreachable but loop.toml is discoverable,
+    `loop status` falls back to offline mode and reports 'stopped'."""
+    rc = main(["status", "--host", "127.0.0.1", "--port", "19999"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "daemon:         stopped" in captured.out
+    assert "daemon not running" in captured.err
+
+
+def test_status_daemon_not_running_no_config(tmp_path, capsys, monkeypatch):
+    """When the daemon is unreachable AND no loop.toml exists in cwd,
+    `loop status` still exits non-zero and says it can't report."""
+    import os
+    monkeypatch.chdir(tmp_path)
     rc = main(["status", "--host", "127.0.0.1", "--port", "19999"])
     assert rc == 1
     stderr = capsys.readouterr().err
-    assert "daemon not running" in stderr
-    assert "127.0.0.1:19999" in stderr
+    assert "cannot report status" in stderr
 
 
 def test_cli_help_lists_new_subcommands():
@@ -432,4 +443,132 @@ def test_cli_help_lists_new_subcommands():
     assert result.returncode == 0
     assert "init" in result.stdout
     assert "status" in result.stdout
+
+
+# ------------------------------------------------------------- REA-103 AC-4+AC-5 integration
+
+
+def test_init_then_status_reports_stopped(tmp_path, capsys, monkeypatch):
+    """loop init then loop status (with --config) reports daemon stopped and
+    lists configured plugins."""
+    # AC-5: loop init scaffolds a new instance.
+    target = tmp_path / "test-instance"
+    rc = main(["init", str(target)])
+    assert rc == 0
+
+    # AC-4: loop status inside the instance reports stopped.
+    rc = main(["status", "--config", str(target), "--host", "127.0.0.1", "--port", "19999"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "daemon:         stopped" in captured.out
+    assert "queue depth:" in captured.out
+    assert "last pass:      none" in captured.out
+    assert "plugins:" in captured.out
+
+
+def test_status_with_explicit_config_offline(tmp_path, capsys):
+    """loop status --config <dir> with no daemon falls back to offline mode."""
+    target = tmp_path / "myinstance"
+    rc = main(["init", str(target)])
+    assert rc == 0
+
+    rc = main(["status", "--config", str(target), "--host", "127.0.0.1", "--port", "19999"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "daemon not running" in captured.err
+    assert "daemon:         stopped" in captured.out
+
+
+# ------------------------------------------------------------- REA-103: argument parsing per subcommand
+
+
+def test_serve_arg_defaults():
+    """loop serve has correct default arguments."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["serve"])
+    assert args.host == "0.0.0.0"
+    assert args.port == 8765
+    assert args.schedule is None
+
+
+def test_serve_arg_overrides():
+    """loop serve accepts --host, --port, --schedule overrides."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--host", "127.0.0.1", "--port", "9000",
+                               "--schedule", "build=30s,review=10s"])
+    assert args.host == "127.0.0.1"
+    assert args.port == 9000
+    assert args.schedule == "build=30s,review=10s"
+
+
+def test_plugin_list_arg_parsing():
+    """loop plugin list has no required positional args."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["plugin", "list"])
+    assert args.plugin_command == "list"
+
+
+def test_plugin_validate_specific_name():
+    """loop plugin validate <name> accepts a positional plugin name."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["plugin", "validate", "linear"])
+    assert args.plugin_command == "validate"
+    assert args.name == "linear"
+
+
+def test_plugin_validate_all():
+    """loop plugin validate (no name) validates all plugins."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["plugin", "validate"])
+    assert args.plugin_command == "validate"
+    assert args.name is None
+
+
+def test_init_arg_defaults():
+    """loop init defaults dir to '.'."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["init"])
+    assert args.dir == "."
+    assert args.force is False
+
+
+def test_init_arg_overrides():
+    """loop init --force /path/to/dir accepts both arguments."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["init", "--force", "/tmp/myinstance"])
+    assert args.dir == "/tmp/myinstance"
+    assert args.force is True
+
+
+def test_status_arg_defaults():
+    """loop status has correct default host/port and --config default."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["status"])
+    assert args.host == "localhost"
+    assert args.port == 8765
+    assert args.config is None
+
+
+def test_status_arg_with_config():
+    """loop status --config <path> sets the config argument."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["status", "--config", "/path/to/loop.toml"])
+    assert args.config == "/path/to/loop.toml"
+
+
+def test_version_arg_parsing():
+    """loop version accepts no arguments."""
+    from loop.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["version"])
+    assert args.command == "version"
 
