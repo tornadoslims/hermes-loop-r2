@@ -69,6 +69,12 @@ def _make_handler(
                 })
                 return
 
+            # /dashboard, /issues, /passes, /plugins — admin pages
+            for page in ("dashboard", "issues", "passes", "plugins"):
+                if self.path == f"/{page}":
+                    self._render_template(f"{page}.html", {})
+                    return
+
             # Everything else — 404
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
