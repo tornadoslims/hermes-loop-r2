@@ -74,6 +74,14 @@ class SelfHealer:
         # REA-127: last pass duration for /metrics.
         self.last_pass_duration: float = 0.0
 
+        # REA-113: ring buffer of pass durations (seconds) for the histogram.
+        # Kept in sync with _recent_passes — max 100 samples.
+        self._pass_duration_samples: List[float] = []
+
+        # REA-113: ring buffer of queue-wait times (seconds per completed pass).
+        # Kept in sync with _recent_passes — max 100 samples.
+        self._queue_wait_samples: List[float] = []
+
         # REA-108: dashboard — currently active pass and recent-passes ring buffer.
         self._active_pass: Optional[Dict[str, Any]] = None
         self._recent_passes: List[Dict[str, Any]] = []
@@ -645,7 +653,8 @@ class SelfHealer:
     def record_pass_ended(self, role: str, issue_id: str,
                           outcome: str, duration_s: float) -> None:
         """REA-108 AC-2/AC-3: clear the active pass and push onto recent-passes
-        ring buffer (max 20)."""
+        ring buffer (max 20). REA-113: also track duration for the Prometheus
+        histogram (max 100 samples)."""
         self._active_pass = None
         entry = {
             "role": role,
@@ -659,6 +668,11 @@ class SelfHealer:
         if len(self._recent_passes) > 20:
             self._recent_passes = self._recent_passes[-20:]
 
+        # REA-113: track duration samples for the histogram.
+        self._pass_duration_samples.append(duration_s)
+        if len(self._pass_duration_samples) > 100:
+            self._pass_duration_samples = self._pass_duration_samples[-100:]
+
     def record_pass_completed(self, duration_s: float = 0.0) -> None:
         self.passes_completed += 1
         self.last_pass_at = self._now()
@@ -668,6 +682,13 @@ class SelfHealer:
         self.passes_failed += 1
         self.last_pass_at = self._now()
         self.last_pass_duration = duration_s
+
+    def record_queue_wait(self, wait_s: float) -> None:
+        """REA-113 AC-4: record the time an issue spent in the ready queue
+        before it was claimed (max 100 samples)."""
+        self._queue_wait_samples.append(wait_s)
+        if len(self._queue_wait_samples) > 100:
+            self._queue_wait_samples = self._queue_wait_samples[-100:]
 
     def snapshot(self, worker_pool=None) -> Dict[str, Any]:
         """``/health`` payload (AC-5): uptime, pass totals, per-plugin
@@ -698,11 +719,17 @@ class SelfHealer:
         except PassEngineError:
             queue_depth = None
 
+        # REA-113: compute average queue wait from recent samples.
+        wait_samples = self._queue_wait_samples
+        queue_wait_avg = (sum(wait_samples) / len(wait_samples)) if wait_samples else None
+
         result: Dict[str, Any] = {
             "uptime_seconds": self._now() - self._started_at,
             "passes_completed": self.passes_completed,
             "passes_failed": self.passes_failed,
             "last_pass_duration": self.last_pass_duration,
+            "pass_duration_samples": list(self._pass_duration_samples),
+            "queue_wait_avg": queue_wait_avg,
             "plugins": plugins,
             "queue_depth": queue_depth,
             "last_pass_at": (
