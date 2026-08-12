@@ -262,6 +262,11 @@ def _make_handler(
     return _Handler
 
 
+def _default_assets_dir() -> str:
+    """Web UI assets shipped inside the package (loop/webui_assets)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui_assets")
+
+
 class WebUIServer:
     """Runs the HTTP server on a background thread.
 
@@ -298,11 +303,19 @@ class WebUIServer:
 
     @property
     def static_dir(self) -> str:
-        return os.path.join(self._project_root, "webui", "static")
+        # Instance override (project_root/webui/static) if it exists;
+        # otherwise assets shipped inside the package.
+        override = os.path.join(self._project_root, "webui", "static")
+        if os.path.isdir(override):
+            return override
+        return os.path.join(_default_assets_dir(), "static")
 
     @property
     def templates_dir(self) -> str:
-        return os.path.join(self._project_root, "webui", "templates")
+        override = os.path.join(self._project_root, "webui", "templates")
+        if os.path.isdir(override):
+            return override
+        return os.path.join(_default_assets_dir(), "templates")
 
     def start(self) -> None:
         handler = _make_handler(

@@ -22,3 +22,6 @@ loop = "loop.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["loop*"]
+
+[tool.setuptools.package-data]
+loop = ["webui_assets/static/*", "webui_assets/templates/*"]
