@@ -10,7 +10,7 @@
 
 <!-- Top Nav Bar -->
 <nav class="top-nav">
-  <a href="dashboard.html" class="nav-brand">
+  <a href="/" class="nav-brand">
     <span class="logo">◈</span>
     Hermes Loop
     <span class="version">r2</span>
@@ -21,9 +21,8 @@
     <a href="passes.html">Passes</a>
     <a href="plugins.html">Plugins</a>
   </div>
-  <div class="nav-status">
-    <span><span class="status-dot"></span> Engine running</span>
-    <span>Uptime 14d 3h</span>
+  <div class="nav-status" id="nav-status">
+    <span><span class="status-dot"></span> Loading…</span>
   </div>
 </nav>
 
@@ -36,7 +35,7 @@
     </a>
     <a href="issues.html" class="sidebar-link">
       <span class="icon">⊡</span> Issues
-      <span class="badge" id="sidebar-open-count">3</span>
+      <span class="badge" id="sidebar-ready-count">—</span>
     </a>
     <a href="passes.html" class="sidebar-link">
       <span class="icon">⟳</span> Passes
@@ -46,7 +45,7 @@
     <div class="sidebar-label">Configuration</div>
     <a href="plugins.html" class="sidebar-link">
       <span class="icon">⬡</span> Plugins
-      <span class="badge" id="sidebar-plugin-count">5</span>
+      <span class="badge" id="sidebar-plugin-count">—</span>
     </a>
     <a href="issues.html" class="sidebar-link">
       <span class="icon">⚙</span> Settings
@@ -56,7 +55,7 @@
     <div class="sidebar-label">Health</div>
     <a href="dashboard.html" class="sidebar-link">
       <span class="icon">◉</span> System
-      <span class="badge badge-success">OK</span>
+      <span class="badge" id="sidebar-health-badge">—</span>
     </a>
     <a href="passes.html" class="sidebar-link">
       <span class="icon">◎</span> Logs
@@ -68,119 +67,241 @@
 <main class="main-content">
   <div class="page-header">
     <h1>Dashboard</h1>
-    <p>Real-time overview of the hermes-loop pipeline</p>
+    <p id="page-subtitle">Real-time overview of the hermes-loop pipeline</p>
   </div>
 
   <!-- Stats Grid -->
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-label">Queue Depth</div>
-      <div class="stat-value" id="queue-depth">3</div>
-      <div class="stat-change up">+2 this hour</div>
+      <div class="stat-value" id="queue-depth">—</div>
+      <div class="stat-change" id="queue-detail">agent-ready issues</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Active Builds</div>
-      <div class="stat-value" id="active-builds">1</div>
-      <div class="stat-change">REA-98 in progress</div>
+      <div class="stat-label">Active Pass</div>
+      <div class="stat-value" id="active-pass-id">—</div>
+      <div class="stat-change" id="active-pass-elapsed"></div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Pass Rate (24h)</div>
-      <div class="stat-value" id="pass-rate">87%</div>
-      <div class="stat-change up">+3% vs yesterday</div>
+      <div class="stat-label">Passes (Completed/Failed)</div>
+      <div class="stat-value" id="pass-totals">— / —</div>
+      <div class="stat-change" id="pass-rate-text"></div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Avg Cycle Time</div>
-      <div class="stat-value" id="cycle-time">4.2</div>
-      <div class="stat-change down">min</div>
+      <div class="stat-label">Daemon Uptime</div>
+      <div class="stat-value" id="uptime">—</div>
+      <div class="stat-change" id="uptime-detail"></div>
     </div>
   </div>
 
-  <!-- Recent Activity -->
+  <!-- Recent Passes -->
   <div class="card mb-md">
     <div class="card-header">
       <h2>Recent Passes</h2>
-      <span class="card-subtitle" id="recent-passes-count">Last 24 hours</span>
+      <span class="card-subtitle" id="recent-passes-count">Last 20</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
             <th>Issue</th>
-            <th>Pass</th>
-            <th>Status</th>
+            <th>Role</th>
+            <th>Outcome</th>
             <th>Duration</th>
             <th>Time</th>
           </tr>
         </thead>
         <tbody id="recent-passes-tbody">
-          <tr>
-            <td class="mono">REA-97</td>
-            <td>build</td>
-            <td><span class="badge badge-success">shipped</span></td>
-            <td class="mono">2.1m</td>
-            <td class="text-muted text-sm">10:42 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-97</td>
-            <td>review</td>
-            <td><span class="badge badge-success">approved</span></td>
-            <td class="mono">0.3m</td>
-            <td class="text-muted text-sm">10:39 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-96</td>
-            <td>build</td>
-            <td><span class="badge badge-warning">blocked</span></td>
-            <td class="mono">—</td>
-            <td class="text-muted text-sm">09:15 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-95</td>
-            <td>build</td>
-            <td><span class="badge badge-success">shipped</span></td>
-            <td class="mono">3.4m</td>
-            <td class="text-muted text-sm">08:50 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-95</td>
-            <td>review</td>
-            <td><span class="badge badge-danger">rejected</span></td>
-            <td class="mono">0.5m</td>
-            <td class="text-muted text-sm">08:47 AM</td>
-          </tr>
+          <tr><td colspan="5" class="text-muted text-sm">No pass data yet</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- Pipeline Health -->
+  <!-- Plugin Health -->
   <div class="card">
     <div class="card-header">
-      <h2>Pipeline Health</h2>
-      <span class="card-subtitle" id="pipeline-state">State: running</span>
+      <h2>Plugin Health</h2>
+      <span class="card-subtitle" id="plugin-health-summary">Checking…</span>
     </div>
-    <div class="log-entry info">
-      <span class="log-time">10:42:15</span>
-      <span class="mock-label">mock</span>
-      Build pass REA-97 shipped successfully
-    </div>
-    <div class="log-entry success">
-      <span class="log-time">10:41:01</span>
-      <span class="mock-label">mock</span>
-      Verification passed: lint ok, 14 tests passed
-    </div>
-    <div class="log-entry info">
-      <span class="log-time">10:39:22</span>
-      <span class="mock-label">mock</span>
-      Review pass REA-97 approved — branch merged
-    </div>
-    <div class="log-entry warn">
-      <span class="log-time">10:35:00</span>
-      <span class="mock-label">mock</span>
-      Rate limit warning: 7 calls/min threshold approaching
+    <div class="plugin-grid" id="plugin-health-grid">
+      <div class="plugin-card">
+        <p class="text-muted text-sm">Loading plugin status…</p>
+      </div>
     </div>
   </div>
 </main>
+
+<script>
+// ── Dashboard polling (AC-5: auto-refresh ≤ 10s) ────────────────────
+
+const POLL_INTERVAL_MS = 8000;
+let activePassStartedAt = null;
+
+function formatDuration(s) {
+  if (s == null) return "—";
+  s = Number(s);
+  if (s < 60) return s.toFixed(1) + "s";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m + "m " + sec + "s";
+}
+
+function formatUptime(s) {
+  if (s == null) return "—";
+  s = Number(s);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + "d " + h + "h " + m + "m";
+  if (h > 0) return h + "h " + m + "m";
+  return m + "m";
+}
+
+function badgeClass(healthy) {
+  if (healthy === true) return "badge-success";
+  if (healthy === false) return "badge-danger";
+  return "badge-muted";
+}
+
+function badgeText(healthy, error) {
+  if (healthy === true) return "ok";
+  if (healthy === false) return error ? "error" : "degraded";
+  return "disabled";
+}
+
+function refresh() {
+  fetch("/api/dashboard")
+    .then(r => r.json())
+    .then(data => {
+      render(data);
+    })
+    .catch(err => {
+      console.error("dashboard fetch failed:", err);
+    });
+}
+
+function render(data) {
+  // ── Stats grid ──
+  // AC-1: Queue depth
+  const qd = data.queue_depth;
+  document.getElementById("queue-depth").textContent = qd != null ? qd : "—";
+  document.getElementById("queue-detail").textContent = "agent-ready issues";
+  document.getElementById("sidebar-ready-count").textContent = qd != null ? qd : "—";
+
+  // AC-2: Active pass
+  const ap = data.active_pass;
+  if (ap) {
+    document.getElementById("active-pass-id").textContent = (ap.issue_id || "—") + (ap.role ? " (" + ap.role + ")" : "");
+    activePassStartedAt = ap.started_at;
+    updateActiveElapsed();
+  } else {
+    document.getElementById("active-pass-id").textContent = "none";
+    document.getElementById("active-pass-elapsed").textContent = "idle";
+    activePassStartedAt = null;
+  }
+
+  // Pass totals
+  const completed = data.passes_completed || 0;
+  const failed = data.passes_failed || 0;
+  const total = completed + failed;
+  document.getElementById("pass-totals").textContent = completed + " / " + failed;
+  if (total > 0) {
+    const rate = Math.round((completed / total) * 100);
+    document.getElementById("pass-rate-text").textContent = rate + "% success rate";
+  } else {
+    document.getElementById("pass-rate-text").textContent = "no passes yet";
+  }
+
+  // Uptime
+  document.getElementById("uptime").textContent = formatUptime(data.uptime_seconds);
+  document.getElementById("uptime-detail").textContent = "since daemon start";
+  document.getElementById("nav-status").innerHTML =
+    '<span><span class="status-dot"></span> Engine running</span>' +
+    '<span>Uptime ' + formatUptime(data.uptime_seconds) + '</span>';
+
+  // ── AC-3: Recent passes table ──
+  const tbody = document.getElementById("recent-passes-tbody");
+  const passes = data.recent_passes || [];
+  document.getElementById("recent-passes-count").textContent =
+    "Last " + passes.length + " passed";
+  if (passes.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm">No pass data yet</td></tr>';
+  } else {
+    // Show newest first
+    const rows = [...passes].reverse();
+    tbody.innerHTML = rows.map(p => {
+      let outcomeClass = "badge-success";
+      if (p.outcome === "failed" || p.outcome === "crashed") outcomeClass = "badge-danger";
+      else if (p.outcome === "changes_requested") outcomeClass = "badge-warning";
+      const ts = p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : "—";
+      return '<tr>' +
+        '<td class="mono">' + (p.issue_id || "—") + '</td>' +
+        '<td>' + (p.role || "—") + '</td>' +
+        '<td><span class="badge ' + outcomeClass + '">' + (p.outcome || "—") + '</span></td>' +
+        '<td class="mono">' + formatDuration(p.duration_s) + '</td>' +
+        '<td class="text-muted text-sm">' + ts + '</td>' +
+        '</tr>';
+    }).join("");
+  }
+
+  // ── AC-4: Plugin health ──
+  const plugins = data.plugins || {};
+  const pnames = Object.keys(plugins);
+  document.getElementById("sidebar-plugin-count").textContent = pnames.length;
+  const grid = document.getElementById("plugin-health-grid");
+  if (pnames.length === 0) {
+    grid.innerHTML = '<div class="plugin-card"><p class="text-muted text-sm">No plugins loaded</p></div>';
+  } else {
+    let healthyCount = 0;
+    grid.innerHTML = pnames.map(name => {
+      const p = plugins[name];
+      const h = p.healthy;
+      if (h) healthyCount++;
+      return '<div class="plugin-card">' +
+        '<h3>⬡ ' + name + '</h3>' +
+        '<div class="plugin-meta">' +
+        '<span class="badge ' + badgeClass(h) + '">' + badgeText(h, p.error) + '</span>' +
+        (p.error ? '<span class="text-sm text-muted">' + p.error + '</span>' : '') +
+        '</div>' +
+        '</div>';
+    }).join("");
+    document.getElementById("plugin-health-summary").textContent =
+      healthyCount + "/" + pnames.length + " healthy";
+    const healthBadge = document.getElementById("sidebar-health-badge");
+    if (healthyCount === pnames.length) {
+      healthBadge.textContent = "OK";
+      healthBadge.className = "badge badge-success";
+    } else if (healthyCount === 0) {
+      healthBadge.textContent = "DOWN";
+      healthBadge.className = "badge badge-danger";
+    } else {
+      healthBadge.textContent = "DEGRADED";
+      healthBadge.className = "badge badge-warning";
+    }
+  }
+
+  document.getElementById("page-subtitle").textContent =
+    "Real-time overview — updated every " + (POLL_INTERVAL_MS / 1000) + "s";
+}
+
+function updateActiveElapsed() {
+  const el = document.getElementById("active-pass-elapsed");
+  if (!activePassStartedAt) {
+    el.textContent = "idle";
+    return;
+  }
+  const elapsed = (Date.now() / 1000) - activePassStartedAt;
+  el.textContent = "running " + formatDuration(elapsed);
+}
+
+// Update elapsed time every second for active pass counting.
+setInterval(updateActiveElapsed, 1000);
+// Full data refresh every POLL_INTERVAL_MS.
+setInterval(refresh, POLL_INTERVAL_MS);
+// Fetch immediately on load.
+refresh();
+</script>
 
 </body>
 </html>

@@ -74,6 +74,10 @@ class SelfHealer:
         # REA-127: last pass duration for /metrics.
         self.last_pass_duration: float = 0.0
 
+        # REA-108: dashboard — currently active pass and recent-passes ring buffer.
+        self._active_pass: Optional[Dict[str, Any]] = None
+        self._recent_passes: List[Dict[str, Any]] = []
+
         # AC-3/AC-6 counters (build-tick only; reset whenever a ready
         # issue is found).
         self._consecutive_empty_ticks = 0
@@ -630,6 +634,31 @@ class SelfHealer:
 
     # ------------------------------------------------------------ AC-5
 
+    def record_pass_started(self, role: str, issue_id: str) -> None:
+        """REA-108 AC-2: record that a pass is now active for the dashboard."""
+        self._active_pass = {
+            "role": role,
+            "issue_id": issue_id,
+            "started_at": self._now(),
+        }
+
+    def record_pass_ended(self, role: str, issue_id: str,
+                          outcome: str, duration_s: float) -> None:
+        """REA-108 AC-2/AC-3: clear the active pass and push onto recent-passes
+        ring buffer (max 20)."""
+        self._active_pass = None
+        entry = {
+            "role": role,
+            "issue_id": issue_id,
+            "outcome": outcome,
+            "duration_s": duration_s,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._recent_passes.append(entry)
+        # Ring-buffer: keep only the last 20.
+        if len(self._recent_passes) > 20:
+            self._recent_passes = self._recent_passes[-20:]
+
     def record_pass_completed(self, duration_s: float = 0.0) -> None:
         self.passes_completed += 1
         self.last_pass_at = self._now()
@@ -680,6 +709,8 @@ class SelfHealer:
                 datetime.fromtimestamp(self.last_pass_at).isoformat()
                 if self.last_pass_at else None
             ),
+            "active_pass": self._active_pass,
+            "recent_passes": self._recent_passes,
         }
 
         if worker_pool is not None:
