@@ -152,8 +152,16 @@ class PluginManager:
         for lp in self.plugins:
             if lp.error or lp.instance is None:
                 continue
-            lp.instance.start()
-            lp.started = True
+            try:
+                lp.instance.start()
+                lp.started = True
+            except Exception as e:  # noqa: BLE001 - a transient start failure
+                # (e.g. tracker API rate limit during _ensure_project) must
+                # not kill the daemon. The SelfHealer's plugin-health check
+                # retries stop()/start() on its regular tick cadence.
+                lp.started = False
+                print(f"[plugins] {lp.name} start() failed (will retry on "
+                      f"health ticks): {e}", flush=True)
 
     def load_and_start_all(self) -> None:
         """Convenience: discover (fail-fast) -> init -> start, in order."""
