@@ -244,6 +244,8 @@ def start_build(config: Config, manager: PluginManager,
     issue = ready[0]
     issue_id = issue["identifier"]
     linear.claim_issue(issue_id)
+    linear.remove_label(issue_id, "agent-ready")
+    linear.add_label(issue_id, "stage-in-progress")
     full = linear.get_issue(issue_id) or issue
     title = full.get("title") or issue.get("title", "")
 
@@ -384,6 +386,9 @@ def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
             ) from e
 
     if issue_id:
+        # Swap agent-ready → stage-in-review label on ship
+        linear.remove_label(issue_id, "agent-ready")
+        linear.add_label(issue_id, "stage-in-review")
         if pr is not None:
             linear.add_comment(
                 issue_id, f"Branch pushed: `{branch}`. PR: {pr.get('url')}. Ready for review."
@@ -439,6 +444,8 @@ def _end_review(manager: PluginManager, worktree: str, state: Dict[str, Any],
 
     if outcome == "approved":
         if issue_id:
+            linear.remove_label(issue_id, "stage-in-review")
+            linear.add_label(issue_id, "stage-code-complete")
             linear.add_comment(issue_id, body or f"Review of `{branch}`: APPROVED.")
             linear.move_to_done(issue_id)
     else:
@@ -446,6 +453,9 @@ def _end_review(manager: PluginManager, worktree: str, state: Dict[str, Any],
         if outcome == "needs_rebase":
             must_fix += f"\n\nRebase `{branch}` onto the default branch before resubmitting."
         if issue_id:
+            if outcome == "changes_requested":
+                linear.remove_label(issue_id, "stage-in-review")
+                linear.add_label(issue_id, "stage-in-progress")
             linear.add_comment(issue_id, f"Review of `{branch}`: CHANGES REQUESTED.\n\n{must_fix}")
             linear.add_label(issue_id, "must-fix")
             linear.claim_issue(issue_id, state="In Progress")

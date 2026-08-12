@@ -108,6 +108,10 @@ class FakeLinearPlugin:
         self.calls.append(("add_label", issue_id, name))
         return {"id": issue_id}
 
+    def remove_label(self, issue_id, name):
+        self.calls.append(("remove_label", issue_id, name))
+        return {"id": issue_id}
+
 
 class FakeLoadedPlugin:
     def __init__(self, name, instance, error=None):
