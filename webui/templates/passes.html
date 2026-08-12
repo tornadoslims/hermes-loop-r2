@@ -20,7 +20,7 @@
     <a href="/passes" class="active">Passes</a>
     <a href="/plugins">Plugins</a>
   </div>
-  <div class="nav-status">
+  <div class="nav-status" id="nav-status">
     <span><span class="status-dot"></span> Engine running</span>
   </div>
 </nav>
@@ -42,13 +42,7 @@
     <div class="sidebar-label">Configuration</div>
     <a href="/plugins" class="sidebar-link">
       <span class="icon">⬡</span> Plugins
-      <span class="badge" id="sidebar-plugin-count">5</span>
-    </a>
-  </div>
-  <div class="sidebar-section">
-    <div class="sidebar-label">Health</div>
-    <a href="/passes" class="sidebar-link">
-      <span class="icon">◎</span> Logs
+      <span class="badge" id="sidebar-plugin-count">—</span>
     </a>
   </div>
 </aside>
@@ -56,86 +50,51 @@
 <main class="main-content">
   <div class="page-header">
     <h1>Passes</h1>
-    <p>Build and review pass history with outcomes</p>
+    <p id="page-subtitle">Build and review pass history with outcomes</p>
   </div>
 
   <!-- Pass Stats -->
   <div class="stats-grid">
     <div class="stat-card">
-      <div class="stat-label">Total Passes (24h)</div>
-      <div class="stat-value" id="total-passes">23</div>
-      <div class="stat-change">14 build · 9 review</div>
+      <div class="stat-label">Total Passes</div>
+      <div class="stat-value" id="total-passes">—</div>
+      <div class="stat-change" id="total-detail">since daemon start</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Success Rate</div>
-      <div class="stat-value" id="success-rate">87%</div>
-      <div class="stat-change up">+3% vs yesterday</div>
+      <div class="stat-value" id="success-rate">—</div>
+      <div class="stat-change" id="success-detail"></div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Aborts</div>
-      <div class="stat-value" id="abort-count">2</div>
-      <div class="stat-change">1 conflict · 1 timeout</div>
+      <div class="stat-label">Failed</div>
+      <div class="stat-value" id="failed-count">—</div>
+      <div class="stat-change">failed or crashed passes</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Avg Build Time</div>
-      <div class="stat-value" id="avg-build-time">3.8</div>
-      <div class="stat-change down">min</div>
+      <div class="stat-label">Last Pass Duration</div>
+      <div class="stat-value" id="last-duration">—</div>
+      <div class="stat-change" id="active-detail"></div>
     </div>
   </div>
 
-  <!-- Pass Log -->
+  <!-- Build Passes -->
   <div class="card mb-md">
     <div class="card-header">
       <h2>Recent Build Passes</h2>
-      <span class="card-subtitle" id="build-passes-count">Last 14 passes</span>
+      <span class="card-subtitle" id="build-passes-count">—</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Pass ID</th>
             <th>Issue</th>
             <th>Outcome</th>
             <th>Duration</th>
-            <th>Started</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody id="build-passes-tbody">
-          <tr>
-            <td class="mono">bld-142</td>
-            <td class="mono">REA-98</td>
-            <td><span class="badge badge-info">in progress</span></td>
-            <td class="mono">—</td>
-            <td class="text-muted text-sm">10:44 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">bld-141</td>
-            <td class="mono">REA-97</td>
-            <td><span class="badge badge-success">shipped</span></td>
-            <td class="mono">2.1m</td>
-            <td class="text-muted text-sm">10:40 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">bld-140</td>
-            <td class="mono">REA-95</td>
-            <td><span class="badge badge-success">shipped</span></td>
-            <td class="mono">3.4m</td>
-            <td class="text-muted text-sm">08:46 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">bld-139</td>
-            <td class="mono">REA-94</td>
-            <td><span class="badge badge-danger">aborted</span></td>
-            <td class="mono">0.8m</td>
-            <td class="text-muted text-sm">07:12 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">bld-138</td>
-            <td class="mono">REA-92</td>
-            <td><span class="badge badge-success">shipped</span></td>
-            <td class="mono">5.1m</td>
-            <td class="text-muted text-sm">06:30 AM</td>
-          </tr>
+          <tr><td colspan="4" class="text-muted text-sm">No build passes yet</td></tr>
         </tbody>
       </table>
     </div>
@@ -145,91 +104,129 @@
   <div class="card mb-md">
     <div class="card-header">
       <h2>Recent Review Passes</h2>
-      <span class="card-subtitle" id="review-passes-count">Last 9 passes</span>
+      <span class="card-subtitle" id="review-passes-count">—</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Pass ID</th>
             <th>Issue</th>
             <th>Verdict</th>
             <th>Duration</th>
-            <th>Started</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody id="review-passes-tbody">
-          <tr>
-            <td class="mono">rev-89</td>
-            <td class="mono">REA-97</td>
-            <td><span class="badge badge-success">approved</span></td>
-            <td class="mono">0.3m</td>
-            <td class="text-muted text-sm">10:39 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">rev-88</td>
-            <td class="mono">REA-95</td>
-            <td><span class="badge badge-danger">rejected</span></td>
-            <td class="mono">0.5m</td>
-            <td class="text-muted text-sm">08:47 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">rev-87</td>
-            <td class="mono">REA-92</td>
-            <td><span class="badge badge-success">approved</span></td>
-            <td class="mono">0.4m</td>
-            <td class="text-muted text-sm">06:37 AM</td>
-          </tr>
-          <tr>
-            <td class="mono">rev-86</td>
-            <td class="mono">REA-90</td>
-            <td><span class="badge badge-success">approved</span></td>
-            <td class="mono">0.2m</td>
-            <td class="text-muted text-sm">05:15 AM</td>
-          </tr>
+          <tr><td colspan="4" class="text-muted text-sm">No review passes yet</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- Pipeline Activity Log -->
+  <!-- Active Pass -->
   <div class="card">
     <div class="card-header">
-      <h2>Activity Log</h2>
-      <span class="card-subtitle" id="log-entries">Live stream</span>
+      <h2>Active Pass</h2>
+      <span class="card-subtitle" id="active-pass-subtitle">—</span>
     </div>
-    <div class="log-entry info">
-      <span class="log-time">10:44:02</span>
-      <span class="mock-label">mock</span>
-      build pass started: REA-98
-    </div>
-    <div class="log-entry success">
-      <span class="log-time">10:42:18</span>
-      <span class="mock-label">mock</span>
-      build pass shipped: REA-97 (2.1m, 14 tests)
-    </div>
-    <div class="log-entry info">
-      <span class="log-time">10:42:15</span>
-      <span class="mock-label">mock</span>
-      pass_end.py rebase + squash + force-push OK
-    </div>
-    <div class="log-entry success">
-      <span class="log-time">10:39:50</span>
-      <span class="mock-label">mock</span>
-      review pass approved: REA-97 → PR merged
-    </div>
-    <div class="log-entry info">
-      <span class="log-time">10:39:45</span>
-      <span class="mock-label">mock</span>
-      pass_end.py: lock released for build
-    </div>
-    <div class="log-entry warn">
-      <span class="log-time">10:35:00</span>
-      <span class="mock-label">mock</span>
-      Rate limit: 429 from Linear API, backing off 30s
+    <div id="active-pass-body">
+      <p class="text-muted text-sm">No pass currently running</p>
     </div>
   </div>
 </main>
+
+<script>
+const POLL_INTERVAL_MS = 8000;
+
+function formatDuration(s) {
+  if (s == null) return "—";
+  s = Number(s);
+  if (s < 60) return s.toFixed(1) + "s";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m + "m " + sec + "s";
+}
+
+function outcomeBadge(outcome) {
+  let cls = "badge-success";
+  if (outcome === "failed" || outcome === "crashed" || outcome === "rejected") cls = "badge-danger";
+  else if (outcome === "changes_requested" || outcome === "aborted") cls = "badge-warning";
+  else if (outcome === "in_progress") cls = "badge-info";
+  return '<span class="badge ' + cls + '">' + (outcome || "—") + '</span>';
+}
+
+function passRow(p, cols) {
+  const ts = p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : "—";
+  return '<tr>' +
+    '<td class="mono">' + (p.issue_id || "—") + '</td>' +
+    '<td>' + outcomeBadge(p.outcome) + '</td>' +
+    '<td class="mono">' + formatDuration(p.duration_s) + '</td>' +
+    '<td class="text-muted text-sm">' + ts + '</td>' +
+    '</tr>';
+}
+
+function render(data) {
+  const completed = data.passes_completed || 0;
+  const failed = data.passes_failed || 0;
+  const total = completed + failed;
+
+  document.getElementById("total-passes").textContent = total;
+  document.getElementById("total-detail").textContent = completed + " completed · " + failed + " failed";
+  document.getElementById("failed-count").textContent = failed;
+  document.getElementById("success-rate").textContent =
+    total > 0 ? Math.round((completed / total) * 100) + "%" : "—";
+  document.getElementById("success-detail").textContent = total > 0 ? "of " + total + " total passes" : "no passes yet";
+  document.getElementById("last-duration").textContent = formatDuration(data.last_pass_duration);
+
+  const plugins = data.plugins || {};
+  document.getElementById("sidebar-plugin-count").textContent = Object.keys(plugins).length;
+
+  const passes = data.recent_passes || [];
+  const builds = passes.filter(p => p.role === "build").reverse();
+  const reviews = passes.filter(p => p.role === "review").reverse();
+
+  const btb = document.getElementById("build-passes-tbody");
+  document.getElementById("build-passes-count").textContent = "Last " + builds.length;
+  btb.innerHTML = builds.length
+    ? builds.map(passRow).join("")
+    : '<tr><td colspan="4" class="text-muted text-sm">No build passes yet</td></tr>';
+
+  const rtb = document.getElementById("review-passes-tbody");
+  document.getElementById("review-passes-count").textContent = "Last " + reviews.length;
+  rtb.innerHTML = reviews.length
+    ? reviews.map(passRow).join("")
+    : '<tr><td colspan="4" class="text-muted text-sm">No review passes yet</td></tr>';
+
+  // Active pass
+  const ap = data.active_pass;
+  const body = document.getElementById("active-pass-body");
+  if (ap) {
+    const elapsed = ap.started_at ? formatDuration((Date.now() / 1000) - ap.started_at) : "—";
+    document.getElementById("active-pass-subtitle").textContent = "running";
+    document.getElementById("active-detail").textContent = (ap.issue_id || "") + " running";
+    body.innerHTML =
+      '<div class="log-entry info">' +
+      '<span class="log-time">' + elapsed + '</span>' +
+      '<span class="mono">' + (ap.issue_id || "—") + '</span> — ' +
+      (ap.role || "") + ' pass in progress' +
+      '</div>';
+  } else {
+    document.getElementById("active-pass-subtitle").textContent = "idle";
+    document.getElementById("active-detail").textContent = "idle";
+    body.innerHTML = '<p class="text-muted text-sm">No pass currently running</p>';
+  }
+}
+
+function refresh() {
+  fetch("/api/dashboard")
+    .then(r => r.json())
+    .then(render)
+    .catch(err => console.error("passes fetch failed:", err));
+}
+
+setInterval(refresh, POLL_INTERVAL_MS);
+refresh();
+</script>
 
 </body>
 </html>

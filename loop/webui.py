@@ -315,7 +315,7 @@ class WebUIServer:
             self.static_dir,
             self.templates_dir,
         )
-        self._httpd = http.server.HTTPServer((self.host, self.port), handler)
+        self._httpd = http.server.ThreadingHTTPServer((self.host, self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
 
