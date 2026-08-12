@@ -592,4 +592,173 @@ def test_issues_page_no_duplicate_css_reference() -> None:
         _, body, _ = _read_url(srv.url("/issues"))
     text = body.decode("utf-8")
     # style.css should appear exactly once in href references
-    assert text.count('href="static/style.css"') == 1
+    assert text.count('href="/static/style.css"') == 1
+
+
+# ── REA-111: Plugin config API ────────────────────────────────────────
+
+
+class _PluginConfigServerFixture:
+    """Context manager that starts/stops a WebUIServer with plugin config providers."""
+
+    def __init__(self, project_root: str, plugin_config_provider=None,
+                 plugin_config_saver=None):
+        self.project_root = project_root
+        self.plugin_config_provider = plugin_config_provider
+        self.plugin_config_saver = plugin_config_saver
+        self.port = _free_port()
+        self.server: WebUIServer | None = None
+
+    def __enter__(self):
+        self.server = WebUIServer(
+            host="127.0.0.1",
+            port=self.port,
+            plugin_config_provider=self.plugin_config_provider,
+            plugin_config_saver=self.plugin_config_saver,
+            project_root=self.project_root,
+        )
+        self.server.start()
+        time.sleep(0.1)
+        return self
+
+    def __exit__(self, *args):
+        if self.server:
+            self.server.stop()
+
+    def url(self, path: str = "/") -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+
+def _post_json(url: str, payload: dict, timeout: float = 5.0) -> tuple[int, bytes, str]:
+    """Do a POST with JSON body and return (status, body_bytes, content_type)."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read()
+        except (ConnectionResetError, OSError):
+            body = b""
+        return e.code, body, e.headers.get("Content-Type", "")
+    body = resp.read()
+    content_type = resp.headers.get("Content-Type", "")
+    return resp.status, body, content_type
+
+
+def test_api_plugins_returns_json() -> None:
+    """AC-1: GET /api/plugins returns valid JSON with plugin config data."""
+    fake_data = {
+        "plugins": {
+            "linear": {
+                "enabled": True,
+                "fields": {
+                    "api_key": {"value": "", "secret": True, "type": "string"},
+                    "team_key": {"value": "REA", "secret": False, "type": "string"},
+                },
+            },
+        },
+        "restart_required": "Restart the daemon for config changes to take effect",
+    }
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_provider=lambda: fake_data) as srv:
+        status, body, ct = _read_url(srv.url("/api/plugins"))
+
+    assert status == 200
+    assert "application/json" in ct
+    data = json.loads(body)
+    assert "plugins" in data
+    assert data["plugins"]["linear"]["enabled"] is True
+    assert data["plugins"]["linear"]["fields"]["api_key"]["secret"] is True
+    assert data["restart_required"] is not None
+
+
+def test_api_plugins_absent_when_no_provider() -> None:
+    """When no plugin_config_provider is set, /api/plugins should 404."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, health_provider=lambda: {}) as srv:
+        status, _, _ = _read_url(srv.url("/api/plugins"))
+    assert status == 404
+
+
+def test_api_plugins_save_valid() -> None:
+    """AC-2: POST /api/plugins/save with valid config returns ok."""
+    def fake_saver(plugin_name, config):
+        return True, []
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_saver=fake_saver) as srv:
+        status, body, ct = _post_json(srv.url("/api/plugins/save"), {
+            "plugin": "linear",
+            "config": {"team_key": "NEW"},
+        })
+
+    assert status == 200
+    assert "application/json" in ct
+    data = json.loads(body)
+    assert data["ok"] is True
+
+
+def test_api_plugins_save_invalid() -> None:
+    """AC-4: POST /api/plugins/save with invalid config returns errors."""
+    def fake_saver(plugin_name, config):
+        return False, ["field 'enabled' must be a boolean, got 'str'"]
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_saver=fake_saver) as srv:
+        status, body, ct = _post_json(srv.url("/api/plugins/save"), {
+            "plugin": "discord",
+            "config": {"enabled": "not-a-bool"},
+        })
+
+    assert status == 400
+    assert "application/json" in ct
+    data = json.loads(body)
+    assert data["ok"] is False
+    assert len(data["errors"]) == 1
+    assert "boolean" in data["errors"][0]
+
+
+def test_api_plugins_save_missing_plugin() -> None:
+    """POST /api/plugins/save without plugin field returns 400."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_saver=lambda n, c: (True, [])) as srv:
+        status, body, ct = _post_json(srv.url("/api/plugins/save"), {
+            "config": {"team_key": "REA"},
+        })
+
+    assert status == 400
+    data = json.loads(body)
+    assert data["ok"] is False
+
+
+def test_api_plugins_save_malformed_json() -> None:
+    """POST /api/plugins/save with invalid JSON returns 400."""
+    import http.client
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_saver=lambda n, c: (True, [])) as srv:
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        conn.request("POST", "/api/plugins/save", body=b"not json",
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+
+    assert resp.status == 400
+    data = json.loads(body)
+    assert data["ok"] is False
+    assert "Invalid JSON" in data["errors"][0]
+
+
+def test_api_plugins_save_absent_when_no_saver() -> None:
+    """When no plugin_config_saver is set, POST /api/plugins/save should 404."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _PluginConfigServerFixture(root, plugin_config_saver=None) as srv:
+        status, _, _ = _post_json(srv.url("/api/plugins/save"), {
+            "plugin": "linear",
+            "config": {},
+        })
+    assert status == 404

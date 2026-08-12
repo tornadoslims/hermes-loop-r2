@@ -42,10 +42,7 @@
     <div class="sidebar-label">Configuration</div>
     <a href="/plugins" class="sidebar-link active">
       <span class="icon">⬡</span> Plugins
-      <span class="badge" id="sidebar-plugin-count">5</span>
-    </a>
-    <a href="/issues" class="sidebar-link">
-      <span class="icon">⚙</span> Settings
+      <span class="badge" id="sidebar-plugin-count">—</span>
     </a>
   </div>
   <div class="sidebar-section">
@@ -58,136 +55,220 @@
 
 <main class="main-content">
   <div class="page-header">
-    <h1>Plugins</h1>
-    <p>Manage pipeline plugins and their configuration</p>
+    <h1>Plugin Configuration</h1>
+    <p>Edit plugin settings. Changes are written to <code>loop.toml</code>.</p>
   </div>
 
-  <!-- Plugin Grid -->
-  <div class="plugin-grid" id="plugin-grid">
-    <div class="plugin-card">
-      <h3>⬡ Build Engine</h3>
-      <p class="plugin-desc">Core build pass engine. Manages worktrees, runs pass_start/pass_end, ships to branches.</p>
-      <div class="plugin-meta">
-        <span class="badge badge-success">active</span>
-        <span>v2.1.0</span>
-        <span class="text-muted">REA-84</span>
-      </div>
-    </div>
-
-    <div class="plugin-card">
-      <h3>⟳ Review Engine</h3>
-      <p class="plugin-desc">Code review pass engine. Reads diffs, evaluates against acceptance criteria, approves or rejects.</p>
-      <div class="plugin-meta">
-        <span class="badge badge-success">active</span>
-        <span>v2.0.1</span>
-        <span class="text-muted">REA-85</span>
-      </div>
-    </div>
-
-    <div class="plugin-card">
-      <h3>◉ Linear Sync</h3>
-      <p class="plugin-desc">Bidirectional Linear integration: reads issue queue, writes comments, manages labels and state transitions.</p>
-      <div class="plugin-meta">
-        <span class="badge badge-success">active</span>
-        <span>v1.9.3</span>
-        <span class="text-muted">REA-82</span>
-      </div>
-    </div>
-
-    <div class="plugin-card">
-      <h3>⊡ GitHub Bridge</h3>
-      <p class="plugin-desc">GitHub PR automation: creates PRs on review approval, merges on green CI. No manual PR creation.</p>
-      <div class="plugin-meta">
-        <span class="badge badge-info">configuring</span>
-        <span>v0.5.0</span>
-        <span class="text-muted">REA-99</span>
-      </div>
-    </div>
-
-    <div class="plugin-card">
-      <h3>⚙ Config Manager</h3>
-      <p class="plugin-desc">Hot-reload loop.toml configuration, sync skills, manage instance profiles without restart.</p>
-      <div class="plugin-meta">
-        <span class="badge badge-warning">disabled</span>
-        <span>v0.3.1</span>
-        <span class="text-muted">REA-96</span>
-      </div>
-    </div>
+  <!-- Restart notice (NG-1) -->
+  <div class="restart-notice" id="restart-notice">
+    <span class="restart-icon">⚠</span>
+    <span id="restart-text">Restart the daemon for config changes to take effect</span>
   </div>
 
-  <!-- Plugin Config Section -->
-  <div class="card mb-md" style="margin-top: 24px;">
-    <div class="card-header">
-      <h2>Global Plugin Settings</h2>
-      <span class="card-subtitle" id="config-source">Source: loop.toml</span>
-    </div>
-    <pre># Plugin configuration (loop.toml)
-[pipeline]
-automerge = true
-schedule_build = "5m"
-schedule_review = "5m"
-
-[agents]
-build_workers = 2
-
-[plugins]
-linear = { enabled = true, team_key = "REA" }
-github = { enabled = false }
-review = { enabled = true, strict_mode = true }</pre>
-  </div>
-
-  <!-- Health -->
-  <div class="card">
-    <div class="card-header">
-      <h2>Plugin Health</h2>
-      <span class="card-subtitle" id="health-status">All core plugins healthy</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Plugin</th>
-            <th>Status</th>
-            <th>Last Heartbeat</th>
-            <th>Uptime</th>
-          </tr>
-        </thead>
-        <tbody id="health-tbody">
-          <tr>
-            <td>Build Engine</td>
-            <td><span class="badge badge-success">healthy</span></td>
-            <td class="mono text-sm">10:44:55</td>
-            <td class="mono text-sm">14d 3h</td>
-          </tr>
-          <tr>
-            <td>Review Engine</td>
-            <td><span class="badge badge-success">healthy</span></td>
-            <td class="mono text-sm">10:39:30</td>
-            <td class="mono text-sm">14d 3h</td>
-          </tr>
-          <tr>
-            <td>Linear Sync</td>
-            <td><span class="badge badge-success">healthy</span></td>
-            <td class="mono text-sm">10:42:00</td>
-            <td class="mono text-sm">14d 3h</td>
-          </tr>
-          <tr>
-            <td>GitHub Bridge</td>
-            <td><span class="badge badge-muted">offline</span></td>
-            <td class="mono text-sm">—</td>
-            <td class="mono text-sm">—</td>
-          </tr>
-          <tr>
-            <td>Config Manager</td>
-            <td><span class="badge badge-muted">disabled</span></td>
-            <td class="mono text-sm">—</td>
-            <td class="mono text-sm">—</td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- Plugin editor cards -->
+  <div class="plugin-editor-grid" id="plugin-editor-grid">
+    <div class="plugin-card">
+      <p class="text-muted">Loading plugin configuration...</p>
     </div>
   </div>
 </main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+let pluginData = {};
+
+// ── Fetch plugin config ────────────────────────────────────────────
+async function loadPlugins() {
+  try {
+    const resp = await fetch('/api/plugins');
+    const data = await resp.json();
+    pluginData = data.plugins || {};
+    document.getElementById('restart-text').textContent =
+      data.restart_required || 'Restart the daemon for config changes to take effect';
+    renderPlugins();
+  } catch (err) {
+    document.getElementById('plugin-editor-grid').innerHTML =
+      '<div class="plugin-card"><p class="text-danger">Failed to load plugin config: ' +
+      escapeHtml(String(err)) + '</p></div>';
+  }
+}
+
+// ── Render all plugin cards ────────────────────────────────────────
+function renderPlugins() {
+  const grid = document.getElementById('plugin-editor-grid');
+  const names = Object.keys(pluginData);
+  document.getElementById('sidebar-plugin-count').textContent = names.length;
+
+  if (names.length === 0) {
+    grid.innerHTML = '<div class="plugin-card"><p class="text-muted">No plugins configured.</p></div>';
+    return;
+  }
+
+  grid.innerHTML = names.map(name => renderPluginCard(name, pluginData[name])).join('');
+}
+
+// ── Render one plugin card ─────────────────────────────────────────
+function renderPluginCard(name, info) {
+  const fields = info.fields || {};
+  const fieldNames = Object.keys(fields);
+  const isEnabled = info.enabled;
+
+  const fieldsHtml = fieldNames.map(fn => {
+    const f = fields[fn];
+    const isSecret = f.secret;
+    const fieldId = `field-${name}-${fn}`;
+    const value = f.value != null ? String(f.value) : '';
+
+    let inputHtml;
+    if (f.type === 'boolean') {
+      const checked = value === 'true' || value === 'True' || value === '1';
+      inputHtml = `<label class="toggle-label">
+        <input type="checkbox" id="${fieldId}" data-field="${fn}" ${checked ? 'checked' : ''}
+               onchange="markDirty('${name}')">
+        <span class="toggle-slider"></span>
+        <span class="toggle-text">${checked ? 'Enabled' : 'Disabled'}</span>
+      </label>`;
+    } else {
+      const inputType = isSecret ? 'password' : 'text';
+      inputHtml = `<div class="input-group">
+        <input type="${inputType}" id="${fieldId}" data-field="${fn}"
+               value="${escapeAttr(value)}" class="config-input"
+               oninput="markDirty('${name}')" ${isSecret ? 'data-secret="true"' : ''}>
+        ${isSecret ? `<button type="button" class="reveal-btn" onclick="toggleReveal('${fieldId}', this)" title="Reveal value">👁</button>` : ''}
+      </div>`;
+    }
+
+    return `<div class="config-field">
+      <label class="config-label" for="${fieldId}">
+        ${escapeHtml(fn)}
+        ${isSecret ? '<span class="secret-badge">secret</span>' : ''}
+        ${f.description ? `<span class="field-desc">${escapeHtml(f.description)}</span>` : ''}
+      </label>
+      ${inputHtml}
+    </div>`;
+  }).join('');
+
+  const statusBadge = isEnabled
+    ? '<span class="badge badge-success">active</span>'
+    : '<span class="badge badge-muted">disabled</span>';
+
+  return `<div class="plugin-card plugin-editor-card" id="plugin-card-${name}">
+    <div class="plugin-card-header">
+      <h3>⬡ ${escapeHtml(name)}</h3>
+      ${statusBadge}
+    </div>
+    <div class="plugin-card-body">
+      ${fieldsHtml}
+    </div>
+    <div class="plugin-card-footer">
+      <div class="save-status" id="save-status-${name}"></div>
+      <button class="btn btn-primary" onclick="savePlugin('${name}')" id="save-btn-${name}">
+        Save Changes
+      </button>
+    </div>
+  </div>`;
+}
+
+// ── Toggle secret field reveal ─────────────────────────────────────
+function toggleReveal(fieldId, btn) {
+  const input = document.getElementById(fieldId);
+  if (!input) return;
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+    btn.title = 'Hide value';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+    btn.title = 'Reveal value';
+  }
+}
+
+// ── Mark dirty state ───────────────────────────────────────────────
+function markDirty(pluginName) {
+  const status = document.getElementById('save-status-' + pluginName);
+  if (status && !status.classList.contains('save-error')) {
+    status.textContent = 'Unsaved changes';
+    status.className = 'save-status save-dirty';
+  }
+}
+
+// ── Save plugin config ─────────────────────────────────────────────
+async function savePlugin(pluginName) {
+  const status = document.getElementById('save-status-' + pluginName);
+  const btn = document.getElementById('save-btn-' + pluginName);
+  const info = pluginData[pluginName];
+  if (!info) return;
+
+  // Collect current field values
+  const config = {};
+  const fields = info.fields || {};
+  for (const fn of Object.keys(fields)) {
+    const fieldId = `field-${pluginName}-${fn}`;
+    const el = document.getElementById(fieldId);
+    if (!el) continue;
+    const schema = fields[fn];
+    if (schema.type === 'boolean') {
+      config[fn] = el.checked;
+    } else {
+      config[fn] = el.value;
+    }
+  }
+
+  // Show saving state
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+  }
+
+  try {
+    const resp = await fetch('/api/plugins/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({plugin: pluginName, config: config}),
+    });
+    const result = await resp.json();
+
+    if (result.ok) {
+      status.textContent = '✓ Saved';
+      status.className = 'save-status save-success';
+      // Update local state
+      for (const fn of Object.keys(config)) {
+        if (info.fields[fn]) {
+          info.fields[fn].value = config[fn];
+        }
+      }
+    } else {
+      const errors = result.errors || ['Unknown error'];
+      status.innerHTML = '✗ ' + errors.map(e => escapeHtml(e)).join('<br>✗ ');
+      status.className = 'save-status save-error';
+    }
+  } catch (err) {
+    status.textContent = '✗ Network error: ' + String(err);
+    status.className = 'save-status save-error';
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Save Changes';
+    }
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Init ───────────────────────────────────────────────────────────
+loadPlugins();
+</script>
 
 </body>
 </html>

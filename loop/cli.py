@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from loop import __version__
 from loop.config import Config, ConfigError, find_loop_toml, load_config
@@ -462,12 +462,57 @@ def cmd_serve(args) -> int:
                 return []
         return _provider
 
+    # REA-111: plugin config provider for the web UI editor.
+    def make_plugin_config_provider(cfg, mgr):
+        from loop.config import plugin_config_schema
+
+        def _provider():
+            enabled_names = set(cfg.plugins.enabled)
+            result: Dict[str, Any] = {"plugins": {}}
+            for lp in mgr.plugins:
+                name = lp.name
+                schema = plugin_config_schema(name)
+                current = cfg.plugin_config(name)
+                fields: Dict[str, Any] = {}
+                for field_name, field_schema in schema.items():
+                    fields[field_name] = {
+                        "value": current.get(field_name, ""),
+                        "secret": field_schema.get("secret", False),
+                        "type": field_schema.get("type", "string"),
+                        "description": field_schema.get("description", ""),
+                    }
+                result["plugins"][name] = {
+                    "enabled": name in enabled_names,
+                    "fields": fields,
+                }
+            result["restart_required"] = (
+                "Restart the daemon for config changes to take effect"
+            )
+            return result
+        return _provider
+
+    def make_plugin_config_saver(cfg):
+        from loop.config import validate_plugin_config, write_plugin_config, ConfigError
+
+        def _saver(plugin_name: str, config_updates: Dict[str, Any]):
+            errors = validate_plugin_config(plugin_name, config_updates)
+            if errors:
+                return False, errors
+            try:
+                write_plugin_config(cfg.path, plugin_name, config_updates)
+            except ConfigError as e:
+                return False, [str(e)]
+            return True, []
+        return _saver
+
     webui = WebUIServer(host=args.host if args.host is not None else config.webui.host,
                         port=args.port if args.port is not None else config.webui.port,
                         health_provider=lambda: healer.snapshot(worker_pool),
                         metrics_provider=make_metrics_provider(healer.snapshot),
                         dashboard_provider=healer.snapshot,
                         issues_provider=make_issues_provider(manager),
+                        plugin_config_provider=make_plugin_config_provider(config, manager),
+                        plugin_config_saver=make_plugin_config_saver(config),
                         project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(

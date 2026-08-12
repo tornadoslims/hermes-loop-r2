@@ -324,3 +324,142 @@ skills = ["loop-build", "loop-review"]
     assert cfg.linear.project == "Loop"
     assert cfg.pipeline.automerge is True
     assert cfg.pipeline.skills == ["loop-build", "loop-review"]
+
+
+# ------------------------------------------------------ REA-111: plugin config editing
+
+
+def test_plugin_config_schema_known_plugin():
+    from loop.config import plugin_config_schema
+    schema = plugin_config_schema("linear")
+    assert "api_key" in schema
+    assert schema["api_key"]["secret"] is True
+    assert schema["api_key"]["type"] == "string"
+    assert "team_key" in schema
+    assert schema["team_key"]["secret"] is False
+
+
+def test_plugin_config_schema_unknown_plugin():
+    from loop.config import plugin_config_schema
+    assert plugin_config_schema("nonexistent") == {}
+
+
+def test_validate_plugin_config_valid():
+    from loop.config import validate_plugin_config
+    errors = validate_plugin_config("discord", {
+        "webhook_url": "https://discord.com/api/webhooks/123",
+        "enabled": True,
+    })
+    assert errors == []
+
+
+def test_validate_plugin_config_unknown_field():
+    from loop.config import validate_plugin_config
+    errors = validate_plugin_config("linear", {"bogus_field": "value"})
+    assert len(errors) == 1
+    assert "unknown field" in errors[0]
+
+
+def test_validate_plugin_config_wrong_type():
+    from loop.config import validate_plugin_config
+    errors = validate_plugin_config("discord", {
+        "enabled": "not-a-boolean",
+    })
+    assert len(errors) == 1
+    assert "must be a boolean" in errors[0]
+
+
+def test_validate_plugin_config_string_for_boolean():
+    from loop.config import validate_plugin_config
+    errors = validate_plugin_config("slack", {
+        "enabled": "true",
+    })
+    assert len(errors) == 1
+    assert "must be a boolean" in errors[0]
+
+
+def test_write_plugin_config_roundtrip(tmp_path):
+    from loop.config import load_config, write_plugin_config
+    path = _write(tmp_path, """[plugins]
+enabled = ["linear", "discord"]
+
+[plugins.config.linear]
+team_key = "REA"
+project = "Loop"
+
+[plugins.config.discord]
+webhook_url = "https://old.example.com"
+enabled = true
+
+[target]
+repo = "x/y"
+""")
+    # Write new config for discord
+    write_plugin_config(path, "discord", {
+        "webhook_url": "https://new.example.com/hook",
+        "enabled": False,
+    })
+    # Reload and verify
+    cfg = load_config(path)
+    assert cfg.plugin_config("discord") == {
+        "webhook_url": "https://new.example.com/hook",
+        "enabled": False,
+    }
+    # Linear config unchanged
+    assert cfg.plugin_config("linear") == {
+        "team_key": "REA",
+        "project": "Loop",
+    }
+
+
+def test_write_plugin_config_missing_section(tmp_path):
+    from loop.config import ConfigError, write_plugin_config
+    path = _write(tmp_path, "[target]\nrepo = \"x/y\"\n")
+    with pytest.raises(ConfigError, match="not found"):
+        write_plugin_config(path, "linear", {"team_key": "REA"})
+
+
+def test_write_plugin_config_preserves_other_sections(tmp_path):
+    from loop.config import load_config, write_plugin_config
+    path = _write(tmp_path, """[plugins]
+enabled = ["linear"]
+
+[plugins.config.linear]
+team_key = "REA"
+
+[pipeline]
+schedule_build = "10m"
+schedule_review = "15m"
+
+[target]
+repo = "x/y"
+""")
+    write_plugin_config(path, "linear", {"team_key": "NEW"})
+    cfg = load_config(path)
+    assert cfg.plugin_config("linear") == {"team_key": "NEW"}
+    assert cfg.pipeline.schedule_build == "10m"
+    assert cfg.pipeline.schedule_review == "15m"
+
+
+def test_write_plugin_config_last_section(tmp_path):
+    """When the plugin config section is the last section in the file."""
+    from loop.config import load_config, write_plugin_config
+    path = _write(tmp_path, """[target]
+repo = "x/y"
+
+[plugins]
+enabled = ["discord"]
+
+[plugins.config.discord]
+webhook_url = "https://old.example.com"
+enabled = true
+""")
+    write_plugin_config(path, "discord", {
+        "webhook_url": "https://new.example.com",
+        "enabled": False,
+    })
+    cfg = load_config(path)
+    assert cfg.plugin_config("discord") == {
+        "webhook_url": "https://new.example.com",
+        "enabled": False,
+    }
