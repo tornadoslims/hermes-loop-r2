@@ -164,10 +164,26 @@ class AgentCrashed(Exception):
 # -------------------------------------------------- Hermes runner
 
 class HermesRunner(_BaseCLIRunner):
-    """Invokes `hermes run` in the worktree (AC-2)."""
+    """Invokes the hermes CLI in the worktree (AC-2).
+
+    Optional config keys (from [agent.hermes] in loop.toml):
+      model    — e.g. "deepseek/deepseek-v4-pro" (passed as `-m`)
+      provider — e.g. "openrouter" (passed as `--provider`)
+      binary   — path override for the hermes executable
+    """
 
     def __init__(self, config: Dict):
         self.binary = self._resolve_binary(config, "HERMES_PATH", "hermes")
+        self.model = config.get("model", "")
+        self.provider = config.get("provider", "")
+
+    def _base_args(self) -> List[str]:
+        args = [self.binary, "--yolo"]
+        if self.model:
+            args += ["-m", self.model]
+        if self.provider:
+            args += ["--provider", self.provider]
+        return args
 
     def run_build(
         self, worktree, issue, on_event, timeout_s=3600,
@@ -175,12 +191,7 @@ class HermesRunner(_BaseCLIRunner):
         on_event("hermes", "invoking")
         prompt = _build_prompt(issue)
         proc = self._run_cli(
-            [
-                self.binary,
-                "--yolo",
-                "-z", prompt,
-                "--in", worktree,
-            ],
+            self._base_args() + ["-z", prompt, "--in", worktree],
             worktree, on_event, timeout_s, "hermes",
         )
         self._check_exit(proc, "hermes")
@@ -196,12 +207,7 @@ class HermesRunner(_BaseCLIRunner):
         on_event("hermes", "invoking review")
         prompt = _review_prompt(issue, branch)
         proc = self._run_cli(
-            [
-                self.binary,
-                "--yolo",
-                "-z", prompt,
-                "--in", worktree,
-            ],
+            self._base_args() + ["-z", prompt, "--in", worktree],
             worktree, on_event, timeout_s, "hermes-review",
         )
         self._check_exit(proc, "hermes-review")
