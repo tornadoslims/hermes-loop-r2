@@ -624,7 +624,7 @@ class LinearPlugin(Plugin):
                 team: {{ id: {{ eq: $teamId }} }}
                 state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }}{proj_filter}
               }}, first: 100) {{
-                nodes {{ id identifier title url state {{ name }} labels {{ nodes {{ name }} }} }}
+                nodes {{ id identifier title url state {{ name type }} labels {{ nodes {{ name }} }} }}
               }}
             }}
             """,

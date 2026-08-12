@@ -11,7 +11,7 @@ import urllib.request
 
 import pytest
 
-from loop.webui import WebUIServer, _guess_mime
+from loop.webui import WebUIServer, _group_issues, _guess_mime
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -40,9 +40,11 @@ def _read_url(url: str, timeout: float = 5.0) -> tuple[int, bytes, str]:
 class _ServerFixture:
     """Context manager that starts/stops a WebUIServer on an ephemeral port."""
 
-    def __init__(self, project_root: str, health_provider=None):
+    def __init__(self, project_root: str, health_provider=None,
+                 issues_provider=None):
         self.project_root = project_root
         self.health_provider = health_provider
+        self.issues_provider = issues_provider
         self.port = _free_port()
         self.server: WebUIServer | None = None
 
@@ -51,6 +53,7 @@ class _ServerFixture:
             host="127.0.0.1",
             port=self.port,
             health_provider=self.health_provider,
+            issues_provider=self.issues_provider,
             project_root=self.project_root,
         )
         self.server.start()
@@ -64,6 +67,20 @@ class _ServerFixture:
 
     def url(self, path: str = "/") -> str:
         return f"http://127.0.0.1:{self.port}{path}"
+
+
+# ── helper: issue factory ────────────────────────────────────────────
+
+
+def _issue(identifier, title, state_type="unstarted", labels=None, url=None):
+    return {
+        "id": f"uuid-{identifier}",
+        "identifier": identifier,
+        "title": title,
+        "url": url or f"https://linear.app/reachjim/issue/{identifier}/fake",
+        "state": {"name": state_type, "type": state_type},
+        "labels": {"nodes": [{"name": lbl} for lbl in (labels or [])]},
+    }
 
 
 # ── MIME guessing (unit) ─────────────────────────────────────────────
@@ -235,7 +252,8 @@ def test_template_missing_vars_renders_gracefully() -> None:
     text = body.decode("utf-8")
     # "running" and "0.1.0" are the default substitutions; unreplaced
     # placeholders would appear as "${...}", which should NOT appear.
-    assert "${" not in text
+    assert "$" not in text
+
 
 # ── REA-108: /api/dashboard ────────────────────────────────────────────
 
@@ -332,3 +350,246 @@ def test_dashboard_api_absent_when_no_provider() -> None:
     with _ServerFixture(root, health_provider=lambda: {}) as srv:
         status, _, _ = _read_url(srv.url("/api/dashboard"))
     assert status == 404
+
+
+# ── REA-109: Issue viewer ─────────────────────────────────────────────
+
+
+# ── AC-1: _group_issues unit tests ────────────────────────────────────
+
+
+def test_group_issues_empty() -> None:
+    assert _group_issues([]) == {
+        "Ready": [],
+        "In Progress": [],
+        "In Review": [],
+        "Blocked": [],
+    }
+
+
+def test_group_issues_ready() -> None:
+    issues = [
+        _issue("REA-1", "Ready issue 1", state_type="unstarted"),
+        _issue("REA-2", "Ready issue 2", state_type="backlog"),
+    ]
+    groups = _group_issues(issues)
+    assert len(groups["Ready"]) == 2
+    assert groups["Ready"][0]["identifier"] == "REA-1"
+    assert groups["Ready"][1]["identifier"] == "REA-2"
+    assert groups["In Progress"] == []
+    assert groups["In Review"] == []
+    assert groups["Blocked"] == []
+
+
+def test_group_issues_in_progress() -> None:
+    issues = [
+        _issue("REA-1", "In progress", state_type="started"),
+    ]
+    groups = _group_issues(issues)
+    assert groups["Ready"] == []
+    assert len(groups["In Progress"]) == 1
+    assert groups["In Progress"][0]["identifier"] == "REA-1"
+
+
+def test_group_issues_in_review() -> None:
+    issues = [
+        _issue("REA-1", "Review me", state_type="started",
+               labels=["stage-in-review"]),
+    ]
+    groups = _group_issues(issues)
+    assert groups["Ready"] == []
+    assert groups["In Progress"] == []
+    assert len(groups["In Review"]) == 1
+    assert groups["In Review"][0]["identifier"] == "REA-1"
+
+
+def test_group_issues_blocked() -> None:
+    issues = [
+        _issue("REA-1", "Blocked issue", state_type="started",
+               labels=["blocked"]),
+    ]
+    groups = _group_issues(issues)
+    assert len(groups["Blocked"]) == 1
+    assert groups["Blocked"][0]["identifier"] == "REA-1"
+
+
+def test_group_issues_blocked_takes_precedence() -> None:
+    """AC-1: blocked label takes priority over stage-in-review and started state."""
+    issues = [
+        _issue("REA-1", "Blocked over review", state_type="started",
+               labels=["blocked", "stage-in-review"]),
+    ]
+    groups = _group_issues(issues)
+    assert len(groups["Blocked"]) == 1
+    assert groups["In Review"] == []
+    assert groups["In Progress"] == []
+
+
+def test_group_issues_mixed() -> None:
+    """AC-1: mixed group of issues correctly bucketed into four groups."""
+    issues = [
+        _issue("REA-1", "Ready", state_type="unstarted"),
+        _issue("REA-2", "In progress", state_type="started"),
+        _issue("REA-3", "In review", state_type="started",
+               labels=["stage-in-review"]),
+        _issue("REA-4", "Blocked", state_type="unstarted",
+               labels=["blocked"]),
+        _issue("REA-5", "Another ready", state_type="backlog"),
+    ]
+    groups = _group_issues(issues)
+    assert [i["identifier"] for i in groups["Ready"]] == ["REA-1", "REA-5"]
+    assert [i["identifier"] for i in groups["In Progress"]] == ["REA-2"]
+    assert [i["identifier"] for i in groups["In Review"]] == ["REA-3"]
+    assert [i["identifier"] for i in groups["Blocked"]] == ["REA-4"]
+
+
+def test_group_issues_case_insensitive_labels() -> None:
+    """Label matching is case-insensitive."""
+    issues = [
+        _issue("REA-1", "Blocked", state_type="started",
+               labels=["BLOCKED"]),
+        _issue("REA-2", "Review", state_type="started",
+               labels=["Stage-In-Review"]),
+    ]
+    groups = _group_issues(issues)
+    assert len(groups["Blocked"]) == 1
+    assert len(groups["In Review"]) == 1
+
+
+# ── AC-1 / AC-2: /api/issues endpoint integration ─────────────────────
+
+
+def test_api_issues_returns_json_with_group_keys() -> None:
+    """AC-1: /api/issues returns valid JSON with the four expected group keys."""
+    fake_issues = [
+        _issue("REA-1", "Ready issue", state_type="unstarted"),
+        _issue("REA-2", "In progress", state_type="started"),
+        _issue("REA-3", "In review", state_type="started",
+               labels=["stage-in-review"]),
+        _issue("REA-4", "Blocked", state_type="unstarted",
+               labels=["blocked"]),
+    ]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, issues_provider=lambda: fake_issues) as srv:
+        status, body, ct = _read_url(srv.url("/api/issues"))
+
+    assert status == 200
+    assert "application/json" in ct
+    data = json.loads(body)
+
+    # All four group keys must be present
+    assert set(data.keys()) == {"Ready", "In Progress", "In Review", "Blocked"}
+
+    # Verify each group has the right issues
+    assert [i["identifier"] for i in data["Ready"]] == ["REA-1"]
+    assert [i["identifier"] for i in data["In Progress"]] == ["REA-2"]
+    assert [i["identifier"] for i in data["In Review"]] == ["REA-3"]
+    assert [i["identifier"] for i in data["Blocked"]] == ["REA-4"]
+
+
+def test_api_issues_each_row_has_required_fields() -> None:
+    """AC-2: each issue in the API response has identifier, title, labels, and url."""
+    fake_issues = [
+        _issue("REA-10", "Test issue", state_type="started",
+               labels=["bug", "agent-ready"]),
+    ]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, issues_provider=lambda: fake_issues) as srv:
+        status, body, ct = _read_url(srv.url("/api/issues"))
+
+    assert status == 200
+    data = json.loads(body)
+    issue = data["In Progress"][0]
+    assert "identifier" in issue
+    assert "title" in issue
+    assert "url" in issue
+    assert "labels" in issue
+    assert issue["identifier"] == "REA-10"
+    assert issue["title"] == "Test issue"
+    assert issue["url"].startswith("https://linear.app/")
+    assert issue["labels"]["nodes"][0]["name"] == "bug"
+
+
+def test_api_issues_provider_error_returns_empty_groups() -> None:
+    """When the provider raises, the API returns empty groups (no crash)."""
+    def broken():
+        raise RuntimeError("Linear API down")
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, issues_provider=broken) as srv:
+        status, body, ct = _read_url(srv.url("/api/issues"))
+
+    assert status == 200
+    data = json.loads(body)
+    assert data["Ready"] == []
+    assert data["In Progress"] == []
+
+
+def test_api_issues_absent_when_no_provider() -> None:
+    """When no issues_provider is set, /api/issues should 404."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root, issues_provider=None) as srv:
+        status, _, _ = _read_url(srv.url("/api/issues"))
+    assert status == 404
+
+
+# ── AC-3: /issues page renders with filter and refresh button ─────────
+
+
+def test_issues_page_returns_html() -> None:
+    """The /issues page returns 200 with text/html content type."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        status, body, ct = _read_url(srv.url("/issues"))
+    assert status == 200
+    assert "text/html" in ct
+
+
+def test_issues_page_has_filter_input() -> None:
+    """AC-3: the /issues page includes a text filter input."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        _, body, _ = _read_url(srv.url("/issues"))
+    text = body.decode("utf-8")
+    assert 'id="issue-filter"' in text
+    assert 'placeholder="Filter by title or identifier' in text
+
+
+def test_issues_page_has_refresh_button() -> None:
+    """AC-4: the /issues page includes a manual refresh button."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        _, body, _ = _read_url(srv.url("/issues"))
+    text = body.decode("utf-8")
+    assert 'id="btn-refresh"' in text
+    assert 'loadIssues()' in text
+
+
+def test_issues_page_loads_on_page_load() -> None:
+    """AC-4: issues are loaded automatically on page load."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        _, body, _ = _read_url(srv.url("/issues"))
+    text = body.decode("utf-8")
+    # loadIssues() is called inline at script end for AC-4 page-load fetch
+    assert "loadIssues()" in text
+
+
+def test_issues_page_has_fetch_api_call() -> None:
+    """AC-2: the /issues page fetches data from /api/issues to render issue rows."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        _, body, _ = _read_url(srv.url("/issues"))
+    text = body.decode("utf-8")
+    # The page fetches from /api/issues to get issue data client-side
+    assert "fetch('/api/issues')" in text
+
+
+def test_issues_page_no_duplicate_css_reference() -> None:
+    """The /issues page references the shared style.css once."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with _ServerFixture(root) as srv:
+        _, body, _ = _read_url(srv.url("/issues"))
+    text = body.decode("utf-8")
+    # style.css should appear exactly once in href references
+    assert text.count('href="static/style.css"') == 1
