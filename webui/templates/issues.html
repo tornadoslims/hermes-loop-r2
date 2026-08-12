@@ -5,20 +5,181 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Issues — Hermes Loop r2</title>
   <link rel="stylesheet" href="static/style.css">
+  <style>
+    /* REA-109: issue viewer additions */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .filter-input {
+      background: var(--bg-body);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      padding: 8px 14px;
+      font-size: 0.88rem;
+      font-family: var(--font-sans);
+      width: 280px;
+      max-width: 100%;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .filter-input:focus {
+      border-color: var(--accent);
+    }
+
+    .filter-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .btn-refresh {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 8px 18px;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-family: var(--font-sans);
+    }
+
+    .btn-refresh:hover {
+      background: var(--accent-glow);
+    }
+
+    .btn-refresh:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .state-section {
+      margin-bottom: 24px;
+    }
+
+    .state-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .state-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .state-count {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 9px;
+    }
+
+    .issue-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+
+    .issue-link:hover {
+      color: var(--accent-hover);
+      text-decoration: underline;
+    }
+
+    .label-tag {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-right: 4px;
+      background: rgba(107, 114, 128, 0.12);
+      color: var(--text-secondary);
+      vertical-align: middle;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text-muted);
+    }
+
+    .empty-state p {
+      font-size: 0.95rem;
+      margin: 0;
+    }
+
+    .loading-indicator {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .error-banner {
+      background: var(--danger-dim);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-sm);
+      color: var(--danger);
+      padding: 10px 16px;
+      margin-bottom: 16px;
+      font-size: 0.85rem;
+    }
+
+    /* Responsive: collapse sidebar on small screens */
+    @media (max-width: 768px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "nav"
+          "sidebar"
+          "main";
+      }
+
+      .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 8px 12px;
+        overflow-x: auto;
+      }
+
+      .toolbar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .filter-input {
+        width: 100%;
+      }
+    }
+  </style>
 </head>
 <body>
 
 <nav class="top-nav">
-  <a href="dashboard.html" class="nav-brand">
-    <span class="logo">◈</span>
+  <a href="/" class="nav-brand">
+    <span class="logo">&#x25C8;</span>
     Hermes Loop
     <span class="version">r2</span>
   </a>
   <div class="nav-links">
-    <a href="dashboard.html">Dashboard</a>
-    <a href="issues.html" class="active">Issues</a>
-    <a href="passes.html">Passes</a>
-    <a href="plugins.html">Plugins</a>
+    <a href="/">Dashboard</a>
+    <a href="/issues" class="active">Issues</a>
+    <a href="/passes">Passes</a>
+    <a href="/plugins">Plugins</a>
   </div>
   <div class="nav-status">
     <span><span class="status-dot"></span> Engine running</span>
@@ -28,25 +189,21 @@
 <aside class="sidebar">
   <div class="sidebar-section">
     <div class="sidebar-label">Overview</div>
-    <a href="dashboard.html" class="sidebar-link">
-      <span class="icon">⊞</span> Dashboard
+    <a href="/" class="sidebar-link">
+      <span class="icon">&#x229E;</span> Dashboard
     </a>
-    <a href="issues.html" class="sidebar-link active">
-      <span class="icon">⊡</span> Issues
-      <span class="badge" id="sidebar-open-count">3</span>
+    <a href="/issues" class="sidebar-link active">
+      <span class="icon">&#x22A1;</span> Issues
+      <span class="badge" id="sidebar-open-count">-</span>
     </a>
-    <a href="passes.html" class="sidebar-link">
-      <span class="icon">⟳</span> Passes
+    <a href="/passes" class="sidebar-link">
+      <span class="icon">&#x27F3;</span> Passes
     </a>
   </div>
   <div class="sidebar-section">
     <div class="sidebar-label">Configuration</div>
-    <a href="plugins.html" class="sidebar-link">
-      <span class="icon">⬡</span> Plugins
-      <span class="badge" id="sidebar-plugin-count">5</span>
-    </a>
-    <a href="issues.html" class="sidebar-link">
-      <span class="icon">⚙</span> Settings
+    <a href="/plugins" class="sidebar-link">
+      <span class="icon">&#x2B21;</span> Plugins
     </a>
   </div>
 </aside>
@@ -54,119 +211,209 @@
 <main class="main-content">
   <div class="page-header">
     <h1>Issues</h1>
-    <p>Queued and in-progress issues from Linear</p>
+    <p>Browse Linear issues grouped by pipeline state</p>
   </div>
 
-  <!-- Queue Stats -->
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">Open</div>
-      <div class="stat-value" id="open-count">3</div>
-      <div class="stat-change">2 ready · 1 blocked</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">In Progress</div>
-      <div class="stat-value" id="in-progress-count">1</div>
-      <div class="stat-change">REA-98</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">In Review</div>
-      <div class="stat-value" id="in-review-count">2</div>
-      <div class="stat-change">Awaiting review pass</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Done (24h)</div>
-      <div class="stat-value" id="done-count">7</div>
-      <div class="stat-change up">+2 vs yesterday</div>
-    </div>
+  <!-- Toolbar: filter + refresh -->
+  <div class="toolbar">
+    <input
+      type="text"
+      class="filter-input"
+      id="issue-filter"
+      placeholder="Filter by title or identifier..."
+      autocomplete="off"
+    >
+    <button class="btn-refresh" id="btn-refresh" onclick="loadIssues()">
+      &#x21BB; Refresh
+    </button>
   </div>
 
-  <!-- Issue Queue Table -->
-  <div class="card mb-md">
-    <div class="card-header">
-      <h2>Issue Queue</h2>
-      <span class="card-subtitle" id="queue-total">8 issues total</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Title</th>
-            <th>Status</th>
-            <th>Priority</th>
-            <th>Age</th>
-          </tr>
-        </thead>
-        <tbody id="issues-tbody">
-          <tr>
-            <td class="mono">REA-98</td>
-            <td>Web UI skeleton — static HTML/CSS dark theme</td>
-            <td><span class="badge badge-info">in progress</span></td>
-            <td><span class="badge badge-warning">high</span></td>
-            <td class="text-muted mono">2h</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-99</td>
-            <td>GitHub PR automation — open/merge from review approval</td>
-            <td><span class="badge badge-info">ready</span></td>
-            <td><span class="badge badge-warning">high</span></td>
-            <td class="text-muted mono">1d</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-100</td>
-            <td>Dashboard API: GET /api/queue and GET /api/passes</td>
-            <td><span class="badge badge-info">ready</span></td>
-            <td><span class="badge badge-muted">medium</span></td>
-            <td class="text-muted mono">3d</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-96</td>
-            <td>Plugin hot-reload on config change</td>
-            <td><span class="badge badge-warning">blocked</span></td>
-            <td><span class="badge badge-muted">medium</span></td>
-            <td class="text-muted mono">4d</td>
-          </tr>
-          <tr>
-            <td class="mono">REA-93</td>
-            <td>Linear CLI: bulk-label command for batch operations</td>
-            <td><span class="badge badge-muted">backlog</span></td>
-            <td><span class="badge badge-muted">low</span></td>
-            <td class="text-muted mono">6d</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  <!-- Error banner (hidden by default) -->
+  <div class="error-banner" id="error-banner" style="display: none;"></div>
 
-  <!-- Blocked Issues -->
-  <div class="card">
-    <div class="card-header">
-      <h2>Blocked Issues</h2>
-      <span class="card-subtitle" id="blocked-count">1 blocked</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Title</th>
-            <th>Blocked Since</th>
-            <th>Reason</th>
-          </tr>
-        </thead>
-        <tbody id="blocked-tbody">
-          <tr>
-            <td class="mono">REA-96</td>
-            <td>Plugin hot-reload on config change</td>
-            <td class="text-muted mono">Aug 8, 2026</td>
-            <td>Awaiting plugin registry refactor (REA-94)</td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- Issue groups rendered by JS -->
+  <div id="issue-groups">
+    <div class="loading-indicator">
+      <p>Loading issues&hellip;</p>
     </div>
   </div>
 </main>
+
+<script>
+  // REA-109 AC-4: data refreshes on page load
+  loadIssues();
+
+  // REA-109 AC-3: text filter on title/identifier (client-side)
+  document.getElementById('issue-filter').addEventListener('input', function() {
+    applyFilter(this.value);
+  });
+
+  // AC-2: state grouping order
+  var STATE_ORDER = ['Ready', 'In Progress', 'In Review', 'Blocked'];
+
+  // AC-2: state label colors
+  var STATE_COLORS = {
+    'Ready': 'badge-info',
+    'In Progress': 'badge-warning',
+    'In Review': 'badge-info',
+    'Blocked': 'badge-danger'
+  };
+
+  var allIssues = {};
+  var filterTerm = '';
+
+  function loadIssues() {
+    var btn = document.getElementById('btn-refresh');
+    var groups = document.getElementById('issue-groups');
+    var errorBanner = document.getElementById('error-banner');
+
+    btn.disabled = true;
+    errorBanner.style.display = 'none';
+
+    fetch('/api/issues')
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function(data) {
+        allIssues = data;
+        renderGroups(allIssues);
+        updateCounts(allIssues);
+      })
+      .catch(function(err) {
+        errorBanner.textContent = 'Failed to load issues: ' + err.message;
+        errorBanner.style.display = 'block';
+      })
+      .finally(function() {
+        btn.disabled = false;
+      });
+  }
+
+  function renderGroups(groups) {
+    var container = document.getElementById('issue-groups');
+    var html = '';
+    var hasAny = false;
+
+    for (var i = 0; i < STATE_ORDER.length; i++) {
+      var state = STATE_ORDER[i];
+      var issues = groups[state] || [];
+      hasAny = hasAny || issues.length > 0;
+
+      html += '<div class="state-section" data-state="' + state + '">';
+      html += '  <div class="state-header">';
+      html += '    <h2>' + state + '</h2>';
+      html += '    <span class="state-count">' + issues.length + '</span>';
+      html += '  </div>';
+
+      if (issues.length === 0) {
+        html += '  <div class="empty-state"><p>No issues in ' + state.toLowerCase() + '</p></div>';
+      } else {
+        html += '  <div class="card"><div class="table-wrap"><table><thead><tr>';
+        html += '    <th>ID</th><th>Title</th><th>Labels</th><th>Link</th>';
+        html += '  </tr></thead><tbody>';
+
+        for (var j = 0; j < issues.length; j++) {
+          var issue = issues[j];
+          var identifier = escapeHtml(issue.identifier || '');
+          var title = escapeHtml(issue.title || '');
+          var url = escapeHtml(issue.url || '');
+          var labels = issue.labels && issue.labels.nodes ? issue.labels.nodes : [];
+          var labelsHtml = '';
+          for (var k = 0; k < labels.length; k++) {
+            labelsHtml += '<span class="label-tag">' + escapeHtml(labels[k].name) + '</span>';
+          }
+
+          html += '<tr data-issue-id="' + identifier + '" data-issue-title="' + escapeAttr(title) + '">';
+          html += '  <td class="mono">' + identifier + '</td>';
+          html += '  <td>' + title + '</td>';
+          html += '  <td>' + labelsHtml + '</td>';
+          html += '  <td><a class="issue-link" href="' + url + '" target="_blank" rel="noopener">Open &nearr;</a></td>';
+          html += '</tr>';
+        }
+
+        html += '</tbody></table></div></div>';
+      }
+
+      html += '</div>';
+    }
+
+    if (!hasAny) {
+      html = '<div class="empty-state"><p>No open issues found</p></div>';
+    }
+
+    container.innerHTML = html;
+
+    // Re-apply current filter
+    if (filterTerm) {
+      applyFilter(filterTerm);
+    }
+  }
+
+  function applyFilter(term) {
+    filterTerm = term.trim().toLowerCase();
+    var rows = document.querySelectorAll('#issue-groups tr[data-issue-id]');
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var id = (row.getAttribute('data-issue-id') || '').toLowerCase();
+      var title = (row.getAttribute('data-issue-title') || '').toLowerCase();
+
+      if (filterTerm === '' || id.indexOf(filterTerm) !== -1 || title.indexOf(filterTerm) !== -1) {
+        row.style.display = '';
+      } else {
+        row.style.display = 'none';
+      }
+    }
+
+    // Update section counts and hide empty sections
+    updateVisibleCounts();
+  }
+
+  function updateVisibleCounts() {
+    var sections = document.querySelectorAll('.state-section');
+    for (var i = 0; i < sections.length; i++) {
+      var section = sections[i];
+      var visibleRows = section.querySelectorAll('tr[data-issue-id]:not([style*="display: none"])');
+      var countEl = section.querySelector('.state-count');
+      if (countEl) {
+        countEl.textContent = visibleRows.length;
+      }
+
+      // Show/hide empty state message based on visible rows
+      var emptyState = section.querySelector('.empty-state');
+      var card = section.querySelector('.card');
+      if (emptyState && card) {
+        // If there's an empty state message, it was rendered because the group is empty
+        // Keep it as-is
+      } else if (visibleRows.length === 0 && card) {
+        // All rows hidden by filter; show a note
+        card.style.display = 'none';
+      } else if (card) {
+        card.style.display = '';
+      }
+    }
+  }
+
+  function updateCounts(groups) {
+    var total = 0;
+    for (var i = 0; i < STATE_ORDER.length; i++) {
+      total += (groups[STATE_ORDER[i]] || []).length;
+    }
+    document.getElementById('sidebar-open-count').textContent = total;
+  }
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function escapeAttr(str) {
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+</script>
 
 </body>
 </html>

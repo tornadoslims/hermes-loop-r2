@@ -451,11 +451,23 @@ def cmd_serve(args) -> int:
     )
     watcher.start()
 
+    from loop.pass_engine import _linear_plugin
+
+    def make_issues_provider(mgr):
+        def _provider():
+            try:
+                linear = _linear_plugin(mgr)
+                return linear.list_open()
+            except Exception:
+                return []
+        return _provider
+
     webui = WebUIServer(host=args.host if args.host is not None else config.webui.host,
                         port=args.port if args.port is not None else config.webui.port,
                         health_provider=lambda: healer.snapshot(worker_pool),
                         metrics_provider=make_metrics_provider(healer.snapshot),
                         dashboard_provider=healer.snapshot,
+                        issues_provider=make_issues_provider(manager),
                         project_root=os.getcwd())
     webui.start()
     manager.emit(DaemonStarted(
