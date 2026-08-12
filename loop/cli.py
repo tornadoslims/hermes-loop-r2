@@ -366,14 +366,16 @@ def _abort_build_pass(healer: SelfHealer, manager: PluginManager,
         pass
 
     try:
-        linear = _linear_plugin(manager)
-        linear.unassign_issue(issue_id)
-        linear.add_label(issue_id, "agent-ready")
-        linear.add_comment(
-            issue_id,
-            f"\u26a0 Build pass aborted: {reason}. Issue returned "
-            f"to the ready queue by the daemon.",
-        )
+            linear = _linear_plugin(manager)
+            linear.remove_label(issue_id, "stage-in-progress")
+            linear.remove_label(issue_id, "agent-ready")
+            linear.unassign_issue(issue_id)
+            linear.add_label(issue_id, "agent-ready")
+            linear.add_comment(
+                issue_id,
+                f"\\u26a0 Build pass aborted: {reason}. Issue returned "
+                f"to the ready queue by the daemon.",
+            )
     except PassEngineError:
         pass
     except Exception:
