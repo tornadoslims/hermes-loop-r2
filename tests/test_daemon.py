@@ -17,6 +17,7 @@ from loop.events import (
     PluginDegraded,
     PluginRecovered,
     PRCreated,
+    PRMerged,
     QueueEmpty,
     QueueStalled,
     RecoveryEvent,
@@ -115,6 +116,10 @@ class FakeLinearPlugin:
     def list_in_review(self, **kwargs):
         self.calls.append(("list_in_review", kwargs))
         return self._in_review
+
+    def move_to_done(self, issue_id):
+        self.calls.append(("move_to_done", issue_id))
+        return {"id": issue_id}
 
 
 class FakeGitHubPlugin:
@@ -768,6 +773,151 @@ def test_reconcile_stale_review_handoff_comments_when_pr_create_fails(tmp_path):
         c[0] == "add_comment" and c[1] == "REA-85" and "rate limited" in c[2]
         for c in linear.calls
     )
+
+
+# ------------------------------------------------------------------ REA-120: merge reconciliation
+
+
+def test_reconcile_merged_prs_marks_done_when_pr_merged(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    branch = "rea-200-merged"
+    _git(["checkout", "-B", branch], clone)
+    (clone / "change.txt").write_text("x")
+    _git(["add", "-A"], clone)
+    _git(["-c", "user.email=a@b.com", "-c", "user.name=A", "commit", "-m", "work"], clone)
+    _git(["push", "origin", branch], clone)
+    _git(["checkout", "main"], clone)
+
+    linear = FakeLinearPlugin()
+    linear._blocked = []
+    github = FakeGitHubPlugin(existing_prs={
+        branch: {"pr_number": 10, "url": "https://x/10", "number": 10, "state": "merged"},
+    })
+
+    class LinearWithLabeled(FakeLinearPlugin):
+        def list_labeled(self, label):
+            self.calls.append(("list_labeled", label))
+            return [{"identifier": "REA-200", "title": "Merged"}]
+
+    linear2 = LinearWithLabeled()
+    manager = _manager_with(linear=linear2, github=github)
+    healer = SelfHealer(config, manager)
+
+    events = healer.reconcile_merged_prs()
+
+    assert len(events) == 1
+    assert isinstance(events[0], PRMerged)
+    assert events[0].issue_id == "REA-200"
+    assert events[0].pr_number == "10"
+    assert ("remove_label", "REA-200", "stage-code-complete") in linear2.calls
+    assert ("move_to_done", "REA-200") in linear2.calls
+
+
+def test_reconcile_merged_prs_skips_when_pr_not_merged(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    branch = "rea-201-open"
+    _git(["checkout", "-B", branch], clone)
+    (clone / "change.txt").write_text("x")
+    _git(["add", "-A"], clone)
+    _git(["-c", "user.email=a@b.com", "-c", "user.name=A", "commit", "-m", "work"], clone)
+    _git(["push", "origin", branch], clone)
+    _git(["checkout", "main"], clone)
+
+    class LinearWithLabeled(FakeLinearPlugin):
+        def list_labeled(self, label):
+            self.calls.append(("list_labeled", label))
+            return [{"identifier": "REA-201", "title": "Still open"}]
+
+    linear = LinearWithLabeled()
+    github = FakeGitHubPlugin(existing_prs={
+        branch: {"number": 11, "state": "open"},
+    })
+    manager = _manager_with(linear=linear, github=github)
+    healer = SelfHealer(config, manager)
+
+    events = healer.reconcile_merged_prs()
+
+    assert events == []
+    assert ("move_to_done", "REA-201") not in linear.calls
+
+
+def test_reconcile_merged_prs_noop_without_linear(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    manager = _manager_with()  # no plugins
+    healer = SelfHealer(config, manager)
+    assert healer.reconcile_merged_prs() == []
+
+
+def test_reconcile_merged_prs_noop_without_github(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    class LinearWithLabeled(FakeLinearPlugin):
+        def list_labeled(self, label):
+            self.calls.append(("list_labeled", label))
+            return [{"identifier": "REA-202", "title": "Code complete"}]
+    linear = LinearWithLabeled()
+    manager = _manager_with(linear=linear)  # no github
+    healer = SelfHealer(config, manager)
+    assert healer.reconcile_merged_prs() == []
+
+
+# ------------------------------------------------------------------ worker_pool integration
+
+
+def test_check_stuck_passes_with_worker_pool(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone, 'pass_timeout = "1s"\n')
+
+    # Create a per-worker worktree with a stale state file.
+    from loop.pass_engine import worktree_path as _wtp, STATE_FILENAME
+    wt0 = _wtp(config, "build", 0)
+    os.makedirs(wt0, exist_ok=True)
+    subprocess.run(["git", "worktree", "add", "--detach", wt0, "origin/main"],
+                    cwd=config.target_repo_path, check=True, capture_output=True)
+    write_state(wt0, {
+        "role": "build", "issue_id": "REA-300", "issue_title": "T",
+        "branch": "rea-300-t", "worktree_path": wt0, "started_at": 1.0,
+        "description": "",
+    })
+    state_path = os.path.join(wt0, STATE_FILENAME)
+    old = time.time() - 3600
+    os.utime(state_path, (old, old))
+
+    linear = FakeLinearPlugin()
+    manager = _manager_with_linear(linear)
+
+    # Fake worker pool that exposes worktree_indices.
+    class FakeWorkerPool:
+        def worktree_indices(self, role):
+            return [0]
+
+    healer = SelfHealer(config, manager)
+    events = healer.check_stuck_passes(worker_pool=FakeWorkerPool())
+
+    assert len(events) == 1
+    assert events[0].issue_id == "REA-300"
+    assert not os.path.isfile(state_path)
+
+
+def test_snapshot_includes_worker_pool_status(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    config = _write_config(clone)
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-5"}])
+    manager = _manager_with_linear(linear)
+    healer = SelfHealer(config, manager, now_fn=lambda: 1000.0)
+
+    class FakeWorkerPool:
+        def active_count(self):
+            return {"build": 2, "review": 1}
+        def total_capacity(self):
+            return {"build": 3, "review": 2}
+
+    snap = healer.snapshot(worker_pool=FakeWorkerPool())
+    assert snap["active_workers"] == {"build": 2, "review": 1}
+    assert snap["total_workers"] == {"build": 3, "review": 2}
 
 
 # ── REA-108: Dashboard active-pass and recent-passes tracking ──────────

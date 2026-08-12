@@ -165,3 +165,54 @@ def test_scheduler_tick_error_emits_error_event_and_keeps_running():
         error_events = [e for e in events if e.action == "error"]
     assert error_events
     assert error_events[0].error == "boom"
+
+
+def test_force_tick_succeeds_when_idle():
+    """force_tick runs immediately when no tick is in flight."""
+    executed = []
+    lock = threading.Lock()
+
+    def tick_fn(role):
+        with lock:
+            executed.append(role)
+
+    scheduler = Scheduler(schedule={"build": 10.0}, tick_fn=tick_fn)
+    result = scheduler.force_tick("build")
+    assert result is True
+    time.sleep(0.1)  # wait for thread to run
+    with lock:
+        assert "build" in executed
+
+
+def test_force_tick_returns_false_when_tick_running():
+    """force_tick returns False if a tick is already in flight."""
+    release = threading.Event()
+
+    def tick_fn(role):
+        release.wait(timeout=2)
+
+    scheduler = Scheduler(schedule={"build": 10.0}, tick_fn=tick_fn)
+    scheduler._running["build"].set()  # simulate running tick
+    result = scheduler.force_tick("build")
+    release.set()
+    assert result is False
+
+
+def test_force_tick_unknown_role_raises():
+    """force_tick raises SchedulerConfigError for unconfigured roles."""
+    def tick_fn(role):
+        pass
+    scheduler = Scheduler(schedule={"build": 10.0}, tick_fn=tick_fn)
+    with pytest.raises(SchedulerConfigError, match="unknown role"):
+        scheduler.force_tick("review")
+
+
+def test_scheduler_stop_timeout():
+    """stop() with a very short timeout still cleans up."""
+    def tick_fn(role):
+        time.sleep(10)
+    scheduler = Scheduler(schedule={"build": 0.05}, tick_fn=tick_fn)
+    scheduler.start()
+    time.sleep(0.05)  # let one tick start
+    scheduler.stop(timeout=0.0)  # immediate stop — threads may not join
+    scheduler._threads = []  # cleaned up

@@ -554,3 +554,44 @@ def test_pass_end_build_without_github_plugin_unchanged(tmp_path):
     assert result["ok"] is True
     assert "pr_url" not in result
     assert ("move_to_review", "REA-123") in linear.calls
+
+
+# ------------------------------------------------------------------ utility functions
+
+
+def test_default_branch_name_for(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    from loop.pass_engine import default_branch_name_for
+    assert default_branch_name_for(str(clone)) == "main"
+
+
+def test_default_branch_name_for_falls_back_without_remote(tmp_path):
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.run(["git", "init", "-b", "master", td], check=True, capture_output=True)
+        from loop.pass_engine import default_branch_name_for
+        # No origin remote set up — falls back to "main"
+        assert default_branch_name_for(td) == "main"
+
+
+def test_pass_end_build_with_custom_commit_message(tmp_path):
+    bare, clone = _init_bare_repo_with_clone(tmp_path)
+    (clone / "loop.toml").write_text(
+        '[plugins]\nenabled = ["linear"]\n\n[pipeline]\nschedule_build = "5m"\nschedule_review = "5m"\n'
+    )
+    config = load_config(str(clone))
+    linear = FakeLinearPlugin(ready=[{"identifier": "REA-124", "title": "Custom msg", "url": "u"}])
+    manager = _manager_with(linear)
+    start_build(config, manager)
+
+    wt = pass_engine.worktree_path(config, "build")
+    with open(os.path.join(wt, "new_file.py"), "w") as f:
+        f.write("print('hi')\n")
+
+    result = pass_end("build", manager=manager, config=config, worktree=wt,
+                       commit_message="custom: my commit")
+
+    assert result["ok"] is True
+    # Verify the commit message was used.
+    code, out, _ = pass_engine._run(["git", "log", "-1", "--format=%s"], cwd=wt)
+    assert "custom: my commit" in out

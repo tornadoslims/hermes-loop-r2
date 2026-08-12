@@ -79,7 +79,7 @@ def _agent_timeout_s(config: Config) -> float:
 
 
 def _abort_worker(worktree: str, issue_id: str, reason: str,
-                  manager: PluginManager) -> None:
+                  manager: PluginManager, role: str = "build") -> None:
     """Reset the worktree and unclaim the issue after a worker crash/timeout."""
     from loop.pass_engine import PassEngineError, _linear_plugin, _run, delete_state
     try:
@@ -91,6 +91,9 @@ def _abort_worker(worktree: str, issue_id: str, reason: str,
 
     try:
         linear = _linear_plugin(manager)
+        if role == "build":
+            linear.remove_label(issue_id, "stage-in-progress")
+        linear.remove_label(issue_id, "agent-ready")
         linear.unassign_issue(issue_id)
         linear.add_label(issue_id, "agent-ready")
         linear.add_comment(
@@ -275,7 +278,7 @@ class WorkerPool:
                 if not result.verify_passed:
                     _abort_worker(worktree, state_issue_id,
                                   "agent reported verify_failed",
-                                  self.manager)
+                                  self.manager, role=role)
                     self._mark_completed(worker_id, role, issue_id,
                                          "verify_failed")
                     return
@@ -287,8 +290,13 @@ class WorkerPool:
                 result = runner.run_review(worktree, agent_issue, branch,
                                            on_event, timeout_s)
                 verdict = result.verdict
+                # Map agent "escalate" verdict to pass_end-compatible outcome.
+                if verdict == "escalate":
+                    verdict = "changes_requested"
                 comment = ("\n".join(result.must_fix_findings)
                            if result.must_fix_findings else None)
+                if result.verdict == "escalate":
+                    comment = (comment or "") + "\n\n⚠️ Escalated: agent recommends human review."
                 pass_end("review", manager=self.manager, config=self.config,
                          worktree=worktree, outcome=verdict, comment=comment)
                 self._mark_completed(worker_id, role, issue_id, verdict)
@@ -299,7 +307,7 @@ class WorkerPool:
             try:
                 if role == "build":
                     _abort_worker(worktree, issue_id, error_msg,
-                                  self.manager)
+                                  self.manager, role=role)
                 else:
                     pass_end("review", manager=self.manager,
                              config=self.config, worktree=worktree,
@@ -313,7 +321,8 @@ class WorkerPool:
         except (PassEngineError, Exception) as e:
             error_msg = str(e)
             try:
-                _abort_worker(worktree, issue_id, error_msg, self.manager)
+                _abort_worker(worktree, issue_id, error_msg, self.manager,
+                         role=role)
             except Exception:
                 pass
             self._mark_completed(worker_id, role, issue_id, "crashed",

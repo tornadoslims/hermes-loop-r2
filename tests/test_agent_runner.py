@@ -400,3 +400,88 @@ schedule_review = "5m"
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- verdict parsing edge cases
+
+
+def test_hermes_parse_verdict_approved_simple():
+    """Output with only 'approved' should return approved verdict."""
+    runner = HermesRunner({"binary": "echo"})
+    result = runner._parse_verdict("The review is complete. Approved.")
+    assert result.verdict == "approved"
+    assert result.must_fix_findings == []
+
+
+def test_hermes_parse_verdict_escalate():
+    """Output with 'escalate' keyword returns escalate verdict."""
+    runner = HermesRunner({"binary": "echo"})
+    result = runner._parse_verdict("Too complex for automated review. Escalate.")
+    assert result.verdict == "escalate"
+
+
+def test_hermes_parse_verdict_changes_requested_default():
+    """Output without escalate or approved returns changes_requested."""
+    runner = HermesRunner({"binary": "echo"})
+    result = runner._parse_verdict("This needs more work on AC-1.")
+    assert result.verdict == "changes_requested"
+
+
+def test_hermes_parse_verdict_with_findings():
+    """Bullet-point lines are parsed as must_fix_findings."""
+    runner = HermesRunner({"binary": "echo"})
+    result = runner._parse_verdict("code changes_requested\n- missing tests\n- typo in docs")
+    assert result.verdict == "changes_requested"
+    assert result.must_fix_findings == ["missing tests", "typo in docs"]
+
+
+def test_hermes_parse_verdict_escalate_with_findings():
+    """escalate verdict carries findings."""
+    runner = HermesRunner({"binary": "echo"})
+    result = runner._parse_verdict("escalate\n- needs human review\n- system integration issue")
+    assert result.verdict == "escalate"
+    assert len(result.must_fix_findings) == 2
+
+
+def test_claude_code_parse_verdict():
+    """ClaudeCodeRunner delegates to _parse_verdict identically."""
+    runner = ClaudeCodeRunner({"binary": "echo", "model": "sonnet"})
+    result = runner._parse_verdict("approved")
+    assert result.verdict == "approved"
+
+
+def test_codex_parse_verdict():
+    """CodexRunner delegates to _parse_verdict identically."""
+    runner = CodexRunner({"binary": "echo"})
+    result = runner._parse_verdict("approved")
+    assert result.verdict == "approved"
+
+
+# ---------------------------------------------------------------- _check_exit and timeout handling
+
+
+def test_check_exit_does_not_raise_on_zero_exit():
+    """_check_exit is a no-op when exit code is 0."""
+    runner = HermesRunner({})
+    proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+    runner._check_exit(proc, "test")  # should not raise
+
+
+def test_check_exit_raises_on_nonzero():
+    """_check_exit raises AgentCrashed for non-zero exit codes."""
+    runner = HermesRunner({})
+    proc = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="boom happened")
+    with pytest.raises(AgentCrashed, match="exited 2"):
+        runner._check_exit(proc, "test-agent")
+
+
+def test_agent_timeout_error_str():
+    """AgentTimeoutError has a readable message."""
+    err = AgentTimeoutError("timed out after 5s")
+    assert "timed out after 5s" in str(err)
+
+
+def test_agent_crashed_str():
+    """AgentCrashed has a readable message."""
+    err = AgentCrashed("exited 1: crash")
+    assert "exited 1" in str(err)

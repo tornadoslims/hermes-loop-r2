@@ -336,17 +336,24 @@ def _run_agent_review_pass(healer: SelfHealer, manager: PluginManager, get_runne
             pass
         return
 
+    # Map agent "escalate" verdict to a pass_end-compatible outcome.
+    # pass_end only accepts approved / changes_requested / needs_rebase.
+    verdict = result.verdict
+    comment = "\n".join(result.must_fix_findings) if result.must_fix_findings else None
+    if verdict == "escalate":
+        verdict = "changes_requested"
+        comment = (comment or "") + "\n\n⚠️ Escalated: agent recommends human review."
     try:
         pass_end("review", manager=manager, config=healer.config,
-                 worktree=worktree, outcome=result.verdict,
-                 comment="\n".join(result.must_fix_findings) if result.must_fix_findings else None)
+                 worktree=worktree, outcome=verdict,
+                 comment=comment)
     except PassEngineError as e:
         print(f"[pass_engine] review pass_end failed: {e}", flush=True)
         healer.record_pass_ended("review", issue_id, "failed",
                                  time.monotonic() - start)
         return
 
-    healer.record_pass_ended("review", issue_id, result.verdict,
+    healer.record_pass_ended("review", issue_id, verdict,
                              time.monotonic() - start)
 
 
