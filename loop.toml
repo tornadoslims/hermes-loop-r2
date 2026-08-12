@@ -1,6 +1,6 @@
 [plugins]
 dir = "plugins"
-enabled = ["linear"]
+enabled = ["linear", "discord"]
 # To also enable the GitHub plugin (loop.plugins.github.GitHubPlugin),
 # add "github" here and set GITHUB_TOKEN in .env:
 #
@@ -12,6 +12,10 @@ enabled = ["linear"]
 [plugins.config.linear]
 # team_key = "REA"  # optional; only required if the Linear workspace has
 #                    # more than one team. Falls back to LINEAR_TEAM_KEY / .env.
+
+[plugins.config.discord]
+# webhook_url = "https://discord.com/api/webhooks/..."
+# enabled = true
 
 [pipeline]
 schedule_build = "5m"
