@@ -228,6 +228,8 @@ class SelfHealer:
         ticks where the queue has issues but none are ready/claimable
         emits StallEvent(kind="stale_ready") -- catches mislabeled
         issues (e.g. missing `agent-ready`)."""
+        # Cache for snapshot() so the dashboard never blocks on Linear.
+        self._last_queue_depth = ready_count
         if ready_count > 0:
             self._consecutive_empty_ticks = 0
             self._consecutive_stale_ready_ticks = 0
@@ -748,12 +750,14 @@ class SelfHealer:
             except Exception as e:  # noqa: BLE001
                 plugins[lp.name] = {"healthy": False, "error": str(e)}
 
-        queue_depth: Optional[int] = None
-        try:
-            linear = _linear_plugin(self.manager)
-            queue_depth = len(linear.list_ready())
-        except PassEngineError:
-            queue_depth = None
+        queue_depth: Optional[int] = getattr(self, "_last_queue_depth", None)
+        if queue_depth is None:
+            # No build tick has run yet — one direct query as a fallback.
+            try:
+                linear = _linear_plugin(self.manager)
+                queue_depth = len(linear.list_ready())
+            except PassEngineError:
+                queue_depth = None
 
         result: Dict[str, Any] = {
             "uptime_seconds": self._now() - self._started_at,
