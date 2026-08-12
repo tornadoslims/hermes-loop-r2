@@ -98,6 +98,7 @@ def _make_tick_fn(manager: PluginManager, healer: SelfHealer,
             # of which pass type just ran, and review's tick already
             # fires on its own 5m cadence independent of build's.
             healer.reconcile_stale_review_handoffs()
+            healer.reconcile_merged_prs()
             # REA-128: check for engine self-updates (rate-limited
             # internally so it doesn't fetch every tick).
             if self_updater is not None:

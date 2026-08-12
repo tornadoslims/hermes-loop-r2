@@ -472,6 +472,27 @@ class LinearPlugin(Plugin):
         )
         return data["issues"]["nodes"]
 
+    def list_labeled(self, label: str) -> List[dict]:
+        """Return issues with a given label (server-side filter)."""
+        team = self._resolve_team()
+        variables: Dict[str, Any] = {"teamId": team["id"]}
+        proj_filter = self._project_filter(variables)
+        data = _gql(
+            self._require_api_key(),
+            f"""
+            query($teamId: ID!{ ", $projectId: ID!" if self._project_id else "" }) {{
+              issues(filter: {{
+                team: {{ id: {{ eq: $teamId }} }}
+                labels: {{ name: {{ eqIgnoreCase: "{label}" }} }}{proj_filter}
+              }}, first: 50) {{
+                nodes {{ id identifier title url state {{ name type }} labels {{ nodes {{ name }} }} }}
+              }}
+            }}
+            """,
+            variables,
+        )
+        return data["issues"]["nodes"]
+
     def remove_label(self, issue_id: str, name: str) -> dict:
         """REA-90 AC-2: drop a label (e.g. `blocked`) from an issue."""
         api_key = self._require_api_key()

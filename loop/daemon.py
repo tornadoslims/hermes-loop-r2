@@ -32,6 +32,7 @@ from loop.events import (
     PluginDegraded,
     PluginRecovered,
     PRCreated,
+    PRMerged,
     QueueEmpty,
     QueueStalled,
     RecoveryEvent,
@@ -572,6 +573,62 @@ class SelfHealer:
             self.manager.emit(event)
             created.append(event)
         return created
+
+    def reconcile_merged_prs(self) -> List[PRMerged]:
+        """Move stage-code-complete issues to Done when their PR is merged.
+        Runs on every tick — bounded by the count of code-complete issues
+        (typically 0-2). One API call to list labeled, one GitHub API call
+        per PR check."""
+        try:
+            linear = _linear_plugin(self.manager)
+        except PassEngineError:
+            return []
+        try:
+            github = _github_plugin(self.manager)
+        except PassEngineError:
+            return []
+        if github is None:
+            return []
+
+        try:
+            code_complete = linear.list_labeled("stage-code-complete")
+        except Exception:
+            return []
+
+        moved: List[PRMerged] = []
+        for issue in code_complete:
+            issue_id = issue.get("identifier")
+            title = issue.get("title", "")
+            if not issue_id:
+                continue
+            branch = branch_for_issue(issue_id, title)
+            try:
+                pr = github.find_pr(branch, state="all")
+            except Exception:
+                continue
+            if pr is None or pr.get("state") != "merged" or not pr.get("number"):
+                continue
+            # PR is merged — close the Linear loop.
+            try:
+                linear.remove_label(issue_id, "stage-code-complete")
+            except Exception:
+                pass
+            try:
+                linear.move_to_done(issue_id)
+            except Exception:
+                continue
+            try:
+                linear.add_comment(issue_id, f"PR #{pr['number']} merged — auto-closing.")
+            except Exception:
+                pass
+            event = PRMerged(
+                issue_id=issue_id,
+                pr_number=str(pr["number"]),
+                timestamp=datetime.fromtimestamp(self._now()),
+            )
+            self.manager.emit(event)
+            moved.append(event)
+        return moved
 
     # ------------------------------------------------------------ AC-4
 
