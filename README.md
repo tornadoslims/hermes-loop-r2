@@ -16,17 +16,18 @@ The daemon is a single process (`loop serve`) with these subsystems:
 | Subsystem | Module | Lines | What it does |
 |---|---|---|---|
 | **Scheduler** | `loop/scheduler.py` | 172 | Build/review tick loop driven by the internal timer |
-| **Pass engine** | `loop/pass_engine.py` | 472 | Worktree management, branch push, review verdict |
+| **Pass engine** | `loop/pass_engine.py` | 480 | Worktree management, branch push, review verdict |
 | **Plugin manager** | `loop/plugin_manager.py` | 205 | Loads plugins from `plugins/` directory per loop.toml |
-| **Event bus** | `loop/events.py` | 282 | Typed pub-sub — daemon emits, plugins subscribe |
-| **Daemon (self-healer)** | `loop/daemon.py` | 664 | Stuck-pass recovery, plugin health, stall detection, dependency unblocking |
+| **Event bus** | `loop/events.py` | 318 | Typed pub-sub — daemon emits, plugins subscribe |
+| **Daemon (self-healer)** | `loop/daemon.py` | 689 | Stuck-pass recovery, plugin health, stall detection, dependency unblocking |
 | **Agent runner** | `loop/agent_runner.py` | 421 | Subprocess invocation of Hermes/Claude Code/Codex for cognitive work |
-| **CLI** | `loop/cli.py` | — | `loop serve`, `loop init`, `loop status`, `loop plugin` |
+| **Worker pool** | `loop/worker_pool.py` | 378 | Thread pool for parallel agent tasks with capacity limits |
+| **CLI** | `loop/cli.py` | 812 | `loop serve`, `loop init`, `loop status`, `loop plugin` |
 | **Web UI** | `loop/webui.py` | 194 | Dashboard, issue viewer, pass controls (served on `:8765`) |
 | **Watcher** | `loop/watcher.py` | 134 | File-watch loop for `loop-eval` issue filing |
 | **Metrics** | `loop/metrics.py` | 97 | Prometheus-compatible metrics endpoint |
 | **Self-update** | `loop/self_update.py` | 200 | Git-fetch-based engine version check and in-place upgrade |
-| **Config** | `loop/config.py` | — | `loop.toml` parsing and validation |
+| **Config** | `loop/config.py` | 223 | `loop.toml` parsing and validation |
 
 ```
 loop serve                    # single process
@@ -77,7 +78,7 @@ honest inventory against `main` as of the latest commit:
 - File watcher for `loop-eval` issue filing (`loop/watcher.py`)
 - Prometheus metrics endpoint (`loop/metrics.py`)
 - Self-update engine via git fetch (`loop/self_update.py`)
-- Test suite: 17 test files covering daemon, plugins, pass engine,
+- Test suite: 18 test files covering daemon, plugins, pass engine,
   scheduler, CLI, events, config (`tests/`)
 
 ### Planned / not yet implemented
