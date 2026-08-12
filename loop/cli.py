@@ -431,7 +431,8 @@ def cmd_serve(args) -> int:
     )
     watcher.start()
 
-    webui = WebUIServer(host=args.host, port=args.port,
+    webui = WebUIServer(host=args.host if args.host is not None else config.webui.host,
+                        port=args.port if args.port is not None else config.webui.port,
                         health_provider=lambda: healer.snapshot(worker_pool),
                         metrics_provider=make_metrics_provider(healer.snapshot), project_root=os.getcwd())
     webui.start()
@@ -809,8 +810,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("serve", help="start the daemon: web UI + plugin lifecycle")
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", default=None, help="bind address (default: from [webui].host or 0.0.0.0)")
+    p.add_argument("--port", type=int, default=None, help="listen port (default: from [webui].port or 8765)")
     p.add_argument(
         "--schedule",
         default=None,

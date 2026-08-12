@@ -1,0 +1,94 @@
+# loop.toml — hermes-loop-r2 configuration
+# ==========================================
+#
+# Every section is optional; absent sections receive their documented defaults.
+# Unknown top-level sections are rejected with a clear error.
+#
+# Copy this file to your loop instance directory and edit as needed.
+
+# ------------------------------------------------------------------- [loop]
+# Path to the hermes-loop engine repository.
+[loop]
+engine = "/Users/jim/ProjectsTrading/hermes-loop"
+
+# ----------------------------------------------------------------- [target]
+# The GitHub repo and local checkout path for the target project.
+[target]
+repo = "owner/repo"       # required — GitHub owner/repository
+path = "/path/to/target"  # optional — defaults to the loop.toml directory
+
+# ---------------------------------------------------------------- [plugins]
+# Plugin directory (relative to loop.toml unless absolute) and load order.
+[plugins]
+dir = "plugins"
+enabled = ["linear"]
+# To also enable the GitHub plugin, add "github" to the list and set
+# GITHUB_TOKEN in .env:
+#
+#   enabled = ["linear", "github"]
+#
+#   [plugins.config.github]
+#   repo = "owner/repo"
+
+# Per-plugin configuration (passed verbatim to the plugin's init).
+[plugins.config.linear]
+# team_key = "REA"  # optional; only needed when the workspace has >1 team
+
+# --------------------------------------------------------------- [pipeline]
+[pipeline]
+schedule_build = "5m"        # Go-style duration: "30s", "5m", "1h"
+schedule_review = "5m"
+automerge = false            # enable auto-merge after approved review
+skills = ["loop-build", "loop-review"]
+pass_timeout = "30m"         # stuck pass detection threshold
+stall_timeout = "30m"        # idle-repo stall detection threshold
+queue_warn_ticks = 3         # consecutive empty-queue ticks before warning
+
+# ----------------------------------------------------------------- [events]
+[events]
+log_file = "events.jsonl"    # JSON-lines event log (relative or absolute)
+
+# ------------------------------------------------------------------ [agent]
+# Agent runner configuration for build/review passes.
+[agent]
+backend = "hermes"           # hermes | claude-code | codex
+timeout = "1h"
+# [agent.hermes]             # optional — Hermes-specific overrides
+# model = "claude-sonnet-4-20250514"
+# [agent.claude_code]        # optional — Claude Code-specific overrides
+# [agent.codex]              # optional — Codex-specific overrides
+
+# ----------------------------------------------------------------- [agents]
+# Parallel worker pool: number of concurrent build/review workers.
+[agents]
+build_workers = 1
+review_workers = 1
+
+# ---------------------------------------------------------------- [watcher]
+# Push-triggered watcher for immediate review ticks.
+[watcher]
+enabled = false
+poll_interval = "15s"
+
+# -------------------------------------------------------------- [scheduler]
+# Internal scheduler (enabled by default).
+[scheduler]
+enabled = true
+
+# ------------------------------------------------------------------ [webui]
+# Web UI server bind address and port.
+[webui]
+host = "0.0.0.0"
+port = 8765
+
+# ------------------------------------------------------------ [self_update]
+# Engine self-update checker (REA-128).
+[self_update]
+enabled = true
+check_interval = "30m"       # how often to git-fetch for engine updates
+
+# ----------------------------------------------------------------- [linear]
+# Linear workspace configuration (used by the engine's pass_start.py).
+[linear]
+team_key = ""                # Linear team key, e.g. "REA"
+project = ""                 # Linear project name

@@ -54,11 +54,10 @@ class SelfUpdater:
         self._now = now_fn
         self._run = _run_fn or _default_run
 
-        # Load [self_update] section, falling back to defaults.
-        su_raw: Dict[str, Any] = config.raw.get("self_update", {}) or {}
+        # Load typed [self_update] section from config.
         self._su = SelfUpdateConfig(
-            enabled=bool(su_raw.get("enabled", True)),
-            check_interval=str(su_raw.get("check_interval", "30m")),
+            enabled=config.self_update.enabled,
+            check_interval=config.self_update.check_interval,
         )
 
         # Internal rate-limiting state.
