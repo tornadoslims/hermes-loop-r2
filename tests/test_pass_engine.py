@@ -363,6 +363,14 @@ def test_pass_end_build_pushes_branch_comments_and_moves_to_review(tmp_path):
     assert result["phase"] == "submitted"
     assert ("move_to_review", "REA-3") in linear.calls
     assert any(c[0] == "add_comment" and c[1] == "REA-3" for c in linear.calls)
+    # Regression: shipped build must leave exactly the review-stage intent;
+    # retaining stage-in-progress made the board show more active builds
+    # than the worker pool actually had.
+    assert ("remove_label", "REA-3", "stage-in-progress") in linear.calls
+    assert ("add_label", "REA-3", "stage-in-review") in linear.calls
+    remove_i = linear.calls.index(("remove_label", "REA-3", "stage-in-progress"))
+    add_i = linear.calls.index(("add_label", "REA-3", "stage-in-review"))
+    assert remove_i < add_i
     # State file consumed.
     assert not os.path.isfile(os.path.join(wt, ".loop.pass.json"))
     # Branch actually landed on origin.

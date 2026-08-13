@@ -446,8 +446,12 @@ def _end_build(manager: PluginManager, worktree: str, state: Dict[str, Any],
             ) from e
 
     if issue_id:
-        # Swap agent-ready → stage-in-review label on ship
+        # Atomic lifecycle intent: build is no longer in progress once it
+        # ships to review. Previously this removed only agent-ready, leaving
+        # stage-in-progress alongside stage-in-review; Linear then showed
+        # more "in progress" jobs than live build workers.
         linear.remove_label(issue_id, "agent-ready")
+        linear.remove_label(issue_id, "stage-in-progress")
         linear.add_label(issue_id, "stage-in-review")
         if pr is not None:
             linear.add_comment(
