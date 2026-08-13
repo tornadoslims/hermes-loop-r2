@@ -150,6 +150,14 @@ class LinearPlugin(Plugin):
         self._team_key = self._config.get("team_key") or os.environ.get("LINEAR_TEAM_KEY")
         self._project_name = self._config.get("project")
         self._project_id: Optional[str] = None
+        # Cache of {issue_id: (internal_id, [label_node, ...])} from our own
+        # most recent remove_label()/add_label() mutation response -- lets
+        # chained label calls (e.g. claim's remove agent-ready -> add
+        # stage-in-progress) build on the write we just made instead of a
+        # fresh _resolve_issue() read, which can observe a stale (pre-write)
+        # snapshot on an eventually consistent replica and resurrect a
+        # label we just removed.
+        self._last_label_state: Dict[str, tuple] = {}
         if not self._api_key:
             raise LinearError(
                 "LINEAR_API_KEY not set (env, .env, or plugins.config.linear.api_key)"
@@ -556,19 +564,32 @@ class LinearPlugin(Plugin):
     def remove_label(self, issue_id: str, name: str) -> dict:
         """REA-90 AC-2: drop a label (e.g. `blocked`) from an issue."""
         api_key = self._require_api_key()
-        issue = self._resolve_issue(issue_id)
-        current = {l["id"]: l["name"] for l in issue["labels"]["nodes"]}
+        cached = self._last_label_state.get(issue_id)
+        if cached is not None:
+            internal_id, nodes = cached
+        else:
+            issue = self._resolve_issue(issue_id)
+            internal_id, nodes = issue["id"], issue["labels"]["nodes"]
+        current = {l["id"]: l["name"] for l in nodes}
         remaining = [lid for lid, lname in current.items() if lname.lower() != name.lower()]
         data = _gql(
             api_key,
             """
             mutation($id: String!, $input: IssueUpdateInput!) {
-              issueUpdate(id: $id, input: $input) { success issue { id identifier labels { nodes { name } } } }
+              issueUpdate(id: $id, input: $input) { success issue { id identifier labels { nodes { id name } } } }
             }
             """,
-            {"id": issue["id"], "input": {"labelIds": remaining}},
+            {"id": internal_id, "input": {"labelIds": remaining}},
         )
-        return data["issueUpdate"]["issue"]
+        result = data["issueUpdate"]["issue"]
+        # Cache the mutation's own response so a same-object caller chaining
+        # remove_label() -> add_label() doesn't re-read via _resolve_issue()
+        # and risk observing pre-write (stale) labels from an eventually
+        # consistent read replica -- this was resurrecting removed labels
+        # (e.g. agent-ready reappearing right after stage-in-progress was
+        # added) under exactly that race.
+        self._last_label_state[issue_id] = (result["id"], result["labels"]["nodes"])
+        return result
 
     def list_in_review(self, review_label: str = "stage-in-review") -> List[dict]:
         """Issues currently awaiting review -- used by the pass engine's
@@ -732,18 +753,29 @@ class LinearPlugin(Plugin):
     def add_label(self, issue_id: str, name: str) -> dict:
         api_key = self._require_api_key()
         team = self._resolve_team(include_labels=True)
-        issue = self._resolve_issue(issue_id)
-        current = {l["id"] for l in issue["labels"]["nodes"]}
-        current_names = {l["name"] for l in issue["labels"]["nodes"]}
+        # Prefer the freshest known label state (set by our own
+        # remove_label()/add_label() calls) over a fresh _resolve_issue()
+        # read, which can observe a pre-write snapshot on an eventually
+        # consistent replica and resurrect a label we just removed.
+        cached = self._last_label_state.get(issue_id)
+        if cached is not None:
+            internal_id, nodes = cached
+        else:
+            issue = self._resolve_issue(issue_id)
+            internal_id, nodes = issue["id"], issue["labels"]["nodes"]
+        current = {l["id"] for l in nodes}
+        current_names = {l["name"] for l in nodes}
         if name not in current_names:
             current.add(self._ensure_label(team, name))
         data = _gql(
             api_key,
             """
             mutation($id: String!, $input: IssueUpdateInput!) {
-              issueUpdate(id: $id, input: $input) { success issue { id identifier labels { nodes { name } } } }
+              issueUpdate(id: $id, input: $input) { success issue { id identifier labels { nodes { id name } } } }
             }
             """,
-            {"id": issue["id"], "input": {"labelIds": list(current)}},
+            {"id": internal_id, "input": {"labelIds": list(current)}},
         )
-        return data["issueUpdate"]["issue"]
+        result = data["issueUpdate"]["issue"]
+        self._last_label_state[issue_id] = (result["id"], result["labels"]["nodes"])
+        return result

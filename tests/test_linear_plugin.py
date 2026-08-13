@@ -255,6 +255,51 @@ def test_remove_label_drops_only_named_label(mock_gql, monkeypatch):
 
 
 @patch("loop.plugins.linear._gql")
+def test_add_label_after_remove_label_does_not_resurrect_removed_label(mock_gql, monkeypatch):
+    """Regression: chaining remove_label("agent-ready") -> add_label("stage-
+    in-progress") must NOT resurrect agent-ready. add_label() used to always
+    re-read labels via _resolve_issue(), which can return a pre-write
+    (stale) snapshot on an eventually consistent API and reintroduce a
+    label the immediately-preceding remove_label() call just dropped --
+    this is exactly what put REA-171 back in "agent-ready" while In
+    Progress. The fix threads the mutation's own response through
+    self._last_label_state so add_label() builds on the write we just
+    made instead of re-reading."""
+    monkeypatch.setenv("LINEAR_API_KEY", "k")
+    mock_gql.side_effect = [
+        # remove_label("agent-ready"): initial read (no cache yet)
+        {"issue": {"id": "1", "identifier": "REA-171",
+                    "labels": {"nodes": [{"id": "l1", "name": "agent-ready"}]}}},
+        # remove_label mutation succeeds -- agent-ready gone
+        {"issueUpdate": {"success": True, "issue": {"id": "1", "identifier": "REA-171",
+                                                      "labels": {"nodes": []}}}},
+        # add_label("stage-in-progress"): team lookup for _ensure_label
+        {"teams": {"nodes": [{"id": "t1", "key": "REA", "name": "R",
+                               "labels": {"nodes": [{"id": "l2", "name": "stage-in-progress"}]}}]}},
+        # add_label mutation -- NOTE: no _resolve_issue call here. If the
+        # implementation regresses to re-reading via _resolve_issue, this
+        # side_effect list runs out and the test errors (StopIteration),
+        # which is itself a signal the caching contract broke.
+        {"issueUpdate": {"success": True, "issue": {"id": "1", "identifier": "REA-171",
+                                                      "labels": {"nodes": [{"id": "l2", "name": "stage-in-progress"}]}}}},
+    ]
+    plugin = LinearPlugin()
+    plugin.init({"team_key": "REA"})
+    plugin.remove_label("REA-171", "agent-ready")
+    result = plugin.add_label("REA-171", "stage-in-progress")
+
+    names = {l["name"] for l in result["labels"]["nodes"]}
+    assert "agent-ready" not in names, "agent-ready resurrected -- the exact REA-171 bug"
+    assert "stage-in-progress" in names
+    # Only 4 calls total: no extra _resolve_issue() between the two label ops.
+    assert mock_gql.call_count == 4
+
+    # The mutation's own labelIds input must not include agent-ready's id.
+    add_call_args = mock_gql.call_args_list[3][0]
+    assert "l1" not in add_call_args[2]["input"]["labelIds"]
+
+
+@patch("loop.plugins.linear._gql")
 def test_dependencies_met_true_when_all_completed(mock_gql, monkeypatch):
     monkeypatch.setenv("LINEAR_API_KEY", "k")
     mock_gql.side_effect = [
