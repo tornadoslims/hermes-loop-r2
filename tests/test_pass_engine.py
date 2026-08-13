@@ -74,8 +74,18 @@ class FakeLinearPlugin:
         self.calls = []
 
     def list_ready(self, **kwargs):
-        self.calls.append(("list_ready", kwargs))
+        self.calls.append(("list_ready",))
         return self._ready
+
+    def list_labeled(self, label):
+        self.calls.append(("list_labeled", label))
+        return [i for i in (self._ready + self._in_review)
+                if label.lower() in {l["name"].lower()
+                                      for l in i.get("labels", {}).get("nodes", [])}]
+
+    def get_comments(self, issue_id, limit=5):
+        self.calls.append(("get_comments", issue_id))
+        return []
 
     def list_in_review(self, **kwargs):
         self.calls.append(("list_in_review", kwargs))

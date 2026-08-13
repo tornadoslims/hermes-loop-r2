@@ -233,10 +233,54 @@ def delete_state(worktree: str) -> None:
 
 def start_build(config: Config, manager: PluginManager,
                 worker_index: Optional[int] = None) -> PassEngineEvent:
-    """Claim the next `agent-ready` issue and set up its build worktree
-    (AC-1). Returns an "idle" event when `list_ready()` is empty (AC-7).
+    """Claim the next work item and set up its build worktree (AC-1).
+    Rework (`must-fix` from a changes-requested review) takes priority
+    over fresh `agent-ready` issues; returns "idle" when neither exists.
     """
     linear = _linear_plugin(manager)
+
+    # --- rework first: a changes-requested branch blocks its issue and
+    # everything depending on it, so clearing feedback beats new work.
+    rework = [i for i in linear.list_labeled("must-fix")
+              if "stage-in-progress" in {l["name"].lower()
+                                          for l in i.get("labels", {}).get("nodes", [])}]
+    if rework:
+        issue = sorted(rework, key=lambda d: d.get("identifier", ""))[0]
+        issue_id = issue["identifier"]
+        full = linear.get_issue(issue_id) or issue
+        title = full.get("title") or issue.get("title", "")
+        branch = branch_for_issue(issue_id, title)
+        try:
+            feedback = "\n\n".join(linear.get_comments(issue_id, limit=3))
+        except Exception:  # noqa: BLE001 - feedback is best-effort
+            feedback = ""
+
+        wt = create_worktree(config, "build", worker_index)
+        code, _, err = _run(["git", "fetch", "origin", branch], cwd=wt, timeout=120)
+        if code != 0:
+            raise PassEngineError(
+                f"rework fetch of {branch} failed (issue {issue_id}): {err}")
+        code, _, err = _run(["git", "checkout", "-B", branch, "FETCH_HEAD"],
+                            cwd=wt, timeout=60)
+        if code != 0:
+            raise PassEngineError(f"rework checkout of {branch} failed: {err}")
+
+        linear.remove_label(issue_id, "must-fix")
+        write_state(wt, {
+            "role": "build",
+            "issue_id": issue_id,
+            "issue_title": title,
+            "branch": branch,
+            "worktree_path": wt,
+            "started_at": time.time(),
+            "description": (full.get("description", "") +
+                            ("\n\n## REVIEW FEEDBACK (must fix)\n" + feedback
+                             if feedback else "")),
+            "rework": True,
+        })
+        return PassEngineEvent(role="build", action="claimed", phase="claimed",
+                               issue=issue_id, branch=branch, timestamp=time.time())
+
     ready = linear.list_ready()
     if not ready:
         return PassEngineEvent(role="build", action="idle", timestamp=time.time())
