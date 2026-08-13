@@ -131,6 +131,49 @@ def test_active_issue_ids_spans_both_roles(tmp_path):
     assert "REA-200" not in pool.active_issue_ids()
 
 
+def test_worker_always_cleans_up_its_worktree(tmp_path, monkeypatch):
+    """Regression: the pool leaked one worktree per pass — 1771 dirs /
+    398MB accumulated in a single night, which also exhausted the process
+    file-descriptor limit.
+
+    cleanup_worktree() existed in pass_engine but was DEAD CODE — never
+    called from anywhere. Worker indices increase monotonically so a leaked
+    worktree is never reused. Cleanup must happen on EVERY exit path
+    (success, agent crash, pass_end failure), hence the finally-block.
+    """
+    import loop.pass_engine as pe
+
+    cfg = _write_config(tmp_path)
+    pool = WorkerPool(cfg, _make_manager())
+
+    cleaned = []
+    monkeypatch.setattr(pe, "cleanup_worktree",
+                        lambda c, role, idx: cleaned.append((role, idx)))
+
+    # 1. Happy path cleans up.
+    monkeypatch.setattr(pool, "_run_worker_inner", lambda *a, **k: None)
+    pool._run_worker("build-0", "build", "REA-1", str(tmp_path / "wt"), 0)
+    assert cleaned == [("build", 0)], f"clean exit did not clean up: {cleaned}"
+
+    # 2. Crashing pass still cleans up (the case that actually leaked).
+    cleaned.clear()
+
+    def boom(*a, **k):
+        raise RuntimeError("agent exploded")
+
+    monkeypatch.setattr(pool, "_run_worker_inner", boom)
+    with pytest.raises(RuntimeError):
+        pool._run_worker("build-1", "build", "REA-2", str(tmp_path / "wt"), 1)
+    assert cleaned == [("build", 1)], f"crash path did not clean up: {cleaned}"
+
+    # 3. A failing cleanup must not mask the pass outcome.
+    cleaned.clear()
+    monkeypatch.setattr(pe, "cleanup_worktree",
+                        lambda c, role, idx: (_ for _ in ()).throw(OSError("busy")))
+    monkeypatch.setattr(pool, "_run_worker_inner", lambda *a, **k: None)
+    pool._run_worker("build-2", "build", "REA-3", str(tmp_path / "wt"), 2)
+
+
 def test_agents_config_loads_custom_values(tmp_path):
     cfg = _write_config(tmp_path, (
         "[agents]\nbuild_workers = 3\nreview_workers = 4\n"

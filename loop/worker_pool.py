@@ -257,7 +257,28 @@ class WorkerPool:
     def _run_worker(self, worker_id: str, role: str, issue_id: str,
                     worktree: str, worker_index: int) -> None:
         """Background thread target: run the agent on the claimed issue,
-        then ship the result through pass_end."""
+        then ship the result through pass_end.
+
+        The worktree is ALWAYS removed when the pass ends (any outcome,
+        any exception). Worker indices increase monotonically, so a
+        worktree left behind is never reused -- without this the pool
+        leaked one directory per pass (1771 dirs / 398MB observed, which
+        also exhausted the process file-descriptor limit).
+        """
+        try:
+            self._run_worker_inner(worker_id, role, issue_id, worktree,
+                                   worker_index)
+        finally:
+            try:
+                from loop.pass_engine import cleanup_worktree
+                cleanup_worktree(self.config, role, worker_index)
+            except Exception as e:  # noqa: BLE001 - cleanup must never mask
+                print(f"[worker_pool] {worker_id} worktree cleanup failed: {e}",
+                      flush=True)
+
+    def _run_worker_inner(self, worker_id: str, role: str, issue_id: str,
+                          worktree: str, worker_index: int) -> None:
+        """Run one pass. See _run_worker() for worktree lifecycle."""
         from loop.agent_runner import (
             AgentCrashed,
             AgentTimeoutError,
