@@ -367,16 +367,28 @@ class LinearPlugin(Plugin):
 
         dep_states: Dict[str, str] = {}
         if all_deps:
+            # IssueFilter has no `identifier` field — filter by team +
+            # issue number (REA-166 -> 166) and rebuild identifiers from
+            # the response.
+            numbers = []
+            for dep in all_deps:
+                try:
+                    numbers.append(int(dep.split("-", 1)[1]))
+                except (IndexError, ValueError):
+                    pass
             dep_data = _gql(
                 self._require_api_key(),
                 """
-                query($ids: [String!]!) {
-                  issues(filter: { identifier: { in: $ids } }, first: 250) {
+                query($teamId: ID!, $numbers: [Float!]!) {
+                  issues(filter: {
+                    team: { id: { eq: $teamId } }
+                    number: { in: $numbers }
+                  }, first: 250) {
                     nodes { identifier state { type } }
                   }
                 }
                 """,
-                {"ids": sorted(all_deps)},
+                {"teamId": team["id"], "numbers": numbers},
             )
             for node in dep_data["issues"]["nodes"]:
                 dep_states[node["identifier"]] = (node.get("state") or {}).get("type", "")
