@@ -179,6 +179,13 @@ class LinearPlugin(Plugin):
         return self._api_key
 
     def _resolve_team(self, include_states=False, include_labels=False) -> dict:
+        # Cache per (states, labels) shape — team id/states/labels don't
+        # change mid-run, and this was previously re-queried on EVERY
+        # plugin method call (a hidden extra API call per operation).
+        cache_key = (include_states, include_labels)
+        cached = getattr(self, "_team_cache", {}).get(cache_key)
+        if cached is not None:
+            return cached
         api_key = self._require_api_key()
         fields = "id key name"
         if include_states:
@@ -187,16 +194,24 @@ class LinearPlugin(Plugin):
             fields += "\n        labels { nodes { id name } }"
         data = _gql(api_key, f"query {{ teams {{ nodes {{ {fields} }} }} }}")
         teams = data["teams"]["nodes"]
+        team = None
         if self._team_key:
             for t in teams:
                 if t["key"] == self._team_key:
-                    return t
-            raise LinearError(
-                f"team key {self._team_key!r} not found; available: {[t['key'] for t in teams]}"
-            )
-        if len(teams) == 1:
-            return teams[0]
-        raise LinearError(f"multiple teams, set team_key: {[t['key'] for t in teams]}")
+                    team = t
+                    break
+            if team is None:
+                raise LinearError(
+                    f"team key {self._team_key!r} not found; available: {[t['key'] for t in teams]}"
+                )
+        elif len(teams) == 1:
+            team = teams[0]
+        else:
+            raise LinearError(f"multiple teams, set team_key: {[t['key'] for t in teams]}")
+        if not hasattr(self, "_team_cache"):
+            self._team_cache = {}
+        self._team_cache[cache_key] = team
+        return team
 
     def _resolve_issue(self, issue_id: str) -> dict:
         api_key = self._require_api_key()
@@ -337,8 +352,41 @@ class LinearPlugin(Plugin):
                 candidates.append(issue)
 
         out = []
+        # Batched dependency check (rate-limit fix): parse deps from the
+        # descriptions we ALREADY have (no per-issue comment fetch in the
+        # hot path), resolve the union of dep ids in ONE query, then
+        # filter locally. Previously this loop cost 3-4 API calls per
+        # candidate (get_comments -> _resolve_issue -> _resolve_issue per
+        # dep) = ~50+ calls/tick on a dependency-ordered backlog.
+        dep_map: Dict[str, List[str]] = {}
+        all_deps: set = set()
         for issue in candidates:
-            unmet = self._unmet_dependencies(issue)
+            deps = self.parse_dependencies(issue.get("description", ""), [])
+            dep_map[issue["identifier"]] = deps
+            all_deps.update(deps)
+
+        dep_states: Dict[str, str] = {}
+        if all_deps:
+            dep_data = _gql(
+                self._require_api_key(),
+                """
+                query($ids: [String!]!) {
+                  issues(filter: { identifier: { in: $ids } }, first: 250) {
+                    nodes { identifier state { type } }
+                  }
+                }
+                """,
+                {"ids": sorted(all_deps)},
+            )
+            for node in dep_data["issues"]["nodes"]:
+                dep_states[node["identifier"]] = (node.get("state") or {}).get("type", "")
+
+        for issue in candidates:
+            unmet = [
+                dep for dep in dep_map[issue["identifier"]]
+                # Fail closed: unknown/unresolvable dependency counts as unmet.
+                if dep_states.get(dep) not in ("completed", "canceled")
+            ]
             if unmet:
                 for dep in unmet:
                     log(f"[queue] skipping {issue['identifier']} -- waiting on {dep}")

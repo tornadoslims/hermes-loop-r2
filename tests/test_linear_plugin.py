@@ -155,11 +155,10 @@ def test_list_ready_skips_issue_with_unmet_dependency(mock_gql, monkeypatch):
                 ]
             }
         },
-        # get_comments -> _resolve_issue(REA-1)
-        {"issue": {"id": "1", "identifier": "REA-1"}},
-        {"issue": {"comments": {"nodes": []}}},
-        # _resolve_issue(REA-2) for the dependency check -- still open
-        {"issue": {"id": "2", "identifier": "REA-2", "state": {"type": "started"}}},
+        # Batched dependency resolution: ONE query for all dep ids.
+        {"issues": {"nodes": [
+            {"identifier": "REA-2", "state": {"type": "started"}},
+        ]}},
     ]
     plugin = LinearPlugin()
     plugin.init({})
@@ -167,6 +166,8 @@ def test_list_ready_skips_issue_with_unmet_dependency(mock_gql, monkeypatch):
     ready = plugin.list_ready(log=logged.append)
     assert ready == []
     assert logged == ["[queue] skipping REA-1 -- waiting on REA-2"]
+    # Rate-limit contract: exactly 3 API calls (team + list + one dep batch).
+    assert mock_gql.call_count == 3
 
 
 @patch("loop.plugins.linear._gql")
@@ -184,14 +185,16 @@ def test_list_ready_includes_issue_with_met_dependency(mock_gql, monkeypatch):
                 ]
             }
         },
-        {"issue": {"id": "1", "identifier": "REA-1"}},
-        {"issue": {"comments": {"nodes": []}}},
-        {"issue": {"id": "2", "identifier": "REA-2", "state": {"type": "completed"}}},
+        # Batched dependency resolution -- REA-2 completed.
+        {"issues": {"nodes": [
+            {"identifier": "REA-2", "state": {"type": "completed"}},
+        ]}},
     ]
     plugin = LinearPlugin()
     plugin.init({})
     ready = plugin.list_ready()
     assert [i["identifier"] for i in ready] == ["REA-1"]
+    assert mock_gql.call_count == 3
 
 
 # ------------------------------------------------------------- REA-90 AC-3
