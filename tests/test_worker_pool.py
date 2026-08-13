@@ -54,6 +54,83 @@ def test_agents_config_loads_defaults(tmp_path):
     assert cfg.agent_pool.review_workers == 1
 
 
+def test_start_tick_never_gives_two_workers_the_same_issue(tmp_path, monkeypatch):
+    """Regression: review-5, review-6, review-7 and review-8 were ALL
+    spawned on REA-173 simultaneously.
+
+    _start_tick() loops `available` times calling start_review(). Unlike
+    start_build() -- which swaps agent-ready -> stage-in-progress and so
+    changes what the next call sees -- start_review() has NO side effect on
+    the issue, so every iteration re-queried list_in_review(), got the same
+    sorted-first issue, and spawned a duplicate reviewer on it. Result:
+    worker counts exceeded the configured cap and N agents duplicated each
+    other's work on one issue.
+
+    The pool now passes the set of already-claimed issue IDs down to the
+    pass engine, growing it as each worker spawns.
+    """
+    import loop.pass_engine as pe
+    from loop.pass_engine import PassEngineEvent
+
+    cfg = _write_config(tmp_path, "[agents]\nbuild_workers = 1\nreview_workers = 4\n")
+    mgr = _make_manager()
+    pool = WorkerPool(cfg, mgr)
+
+    # Simulate a review queue where the SAME issue always sorts first.
+    seen_exclusions = []
+
+    def fake_start_review(config, manager, worker_index=None, exclude_issues=None):
+        exclude = exclude_issues or set()
+        seen_exclusions.append(set(exclude))
+        queue = ["REA-173", "REA-174", "REA-175"]
+        remaining = [i for i in queue if i not in exclude]
+        if not remaining:
+            return PassEngineEvent(role="review", action="idle", timestamp=time.time())
+        return PassEngineEvent(role="review", action="claimed", phase="claimed",
+                               issue=remaining[0], branch="b", timestamp=time.time())
+
+    monkeypatch.setattr(pe, "start_review", fake_start_review)
+    monkeypatch.setattr(pe, "worktree_path", lambda c, r, i: tmp_path / f"{r}-{i}")
+    # Keep worker threads inert so the test only exercises claim logic.
+    monkeypatch.setattr(pool, "_run_worker", lambda *a, **k: None)
+
+    started = pool.start_review_tick()
+
+    claimed_issues = [w.issue_id for w in pool._workers["review"]]
+    assert len(claimed_issues) == len(set(claimed_issues)), (
+        f"same issue handed to multiple workers: {claimed_issues}"
+    )
+    # Only 3 issues available for 4 slots -> 3 workers, 4th sees idle.
+    assert sorted(claimed_issues) == ["REA-173", "REA-174", "REA-175"]
+    assert started == 3
+    # Each successive call must see a strictly larger exclusion set.
+    assert seen_exclusions[0] == set()
+    assert "REA-173" in seen_exclusions[1]
+    assert {"REA-173", "REA-174"} <= seen_exclusions[2]
+
+
+def test_active_issue_ids_spans_both_roles(tmp_path):
+    """A build worker's issue must also be invisible to the review tick."""
+    cfg = _write_config(tmp_path)
+    pool = WorkerPool(cfg, _make_manager())
+    # Worker.active requires a live thread, so use one that blocks until
+    # we release it.
+    release = threading.Event()
+    t = threading.Thread(target=release.wait, daemon=True)
+    t.start()
+    pool._workers["build"].append(Worker(
+        worker_id="build-0", role="build", worktree="/tmp/wt",
+        issue_id="REA-200", thread=t, started_at=time.time(),
+    ))
+    try:
+        assert "REA-200" in pool.active_issue_ids()
+    finally:
+        release.set()
+        t.join(timeout=2)
+    # Once the worker's thread finishes, its issue is claimable again.
+    assert "REA-200" not in pool.active_issue_ids()
+
+
 def test_agents_config_loads_custom_values(tmp_path):
     cfg = _write_config(tmp_path, (
         "[agents]\nbuild_workers = 3\nreview_workers = 4\n"

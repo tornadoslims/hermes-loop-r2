@@ -140,6 +140,23 @@ class WorkerPool:
                 for role in ("build", "review")
             }
 
+    def active_issue_ids(self) -> set:
+        """Issue IDs currently owned by a live worker in ANY role.
+
+        The pool must not hand the same issue to two workers: start_review()
+        has no side effect on the issue's labels (unlike start_build(), which
+        swaps agent-ready -> stage-in-progress), so repeated calls within one
+        tick would otherwise return the SAME issue every time and spawn N
+        duplicate reviewers on it.
+        """
+        with self._lock:
+            return {
+                w.issue_id
+                for role in ("build", "review")
+                for w in self._workers[role]
+                if w.active and w.issue_id
+            }
+
     def total_capacity(self) -> Dict[str, int]:
         """Return the configured maximum workers per role."""
         return {"build": self.build_workers, "review": self.review_workers}
@@ -171,6 +188,10 @@ class WorkerPool:
         from loop.pass_engine import PassEngineError, start_build, start_review
 
         started = 0
+        # Issues already owned by a live worker (any role). Grows as this
+        # tick spawns workers, so two iterations can never claim the same
+        # issue -- the duplicate-reviewer bug (review-5..8 all on REA-173).
+        claimed = self.active_issue_ids()
         for _ in range(available):
             with self._lock:
                 idx = self._next_index[role]
@@ -181,10 +202,12 @@ class WorkerPool:
             try:
                 if role == "build":
                     event = start_build(self.config, self.manager,
-                                        worker_index=idx)
+                                        worker_index=idx,
+                                        exclude_issues=claimed)
                 else:
                     event = start_review(self.config, self.manager,
-                                         worker_index=idx)
+                                         worker_index=idx,
+                                         exclude_issues=claimed)
             except PassEngineError as e:
                 print(f"[worker_pool] {worker_id} start failed: {e}",
                       flush=True)
@@ -194,6 +217,7 @@ class WorkerPool:
                 break  # no more issues to claim
 
             issue_id = event.issue or ""
+            claimed.add(issue_id)
             from loop.pass_engine import worktree_path as _wtp
             worktree = _wtp(self.config, role, idx)
 

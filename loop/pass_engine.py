@@ -232,17 +232,23 @@ def delete_state(worktree: str) -> None:
 # ------------------------------------------------------------ build role
 
 def start_build(config: Config, manager: PluginManager,
-                worker_index: Optional[int] = None) -> PassEngineEvent:
+                worker_index: Optional[int] = None,
+                exclude_issues: Optional[set] = None) -> PassEngineEvent:
     """Claim the next work item and set up its build worktree (AC-1).
     Rework (`must-fix` from a changes-requested review) takes priority
     over fresh `agent-ready` issues; returns "idle" when neither exists.
+
+    `exclude_issues` holds issue IDs already owned by a live worker, so a
+    multi-worker pool never hands the same issue to two workers.
     """
     linear = _linear_plugin(manager)
+    exclude = exclude_issues or set()
 
     # --- rework first: a changes-requested branch blocks its issue and
     # everything depending on it, so clearing feedback beats new work.
     rework = [i for i in linear.list_labeled("must-fix")
-              if "stage-in-progress" in {l["name"].lower()
+              if i.get("identifier") not in exclude
+              and "stage-in-progress" in {l["name"].lower()
                                           for l in i.get("labels", {}).get("nodes", [])}]
     if rework:
         issue = sorted(rework, key=lambda d: d.get("identifier", ""))[0]
@@ -281,7 +287,8 @@ def start_build(config: Config, manager: PluginManager,
         return PassEngineEvent(role="build", action="claimed", phase="claimed",
                                issue=issue_id, branch=branch, timestamp=time.time())
 
-    ready = linear.list_ready()
+    ready = [i for i in linear.list_ready()
+             if i.get("identifier") not in exclude]
     if not ready:
         return PassEngineEvent(role="build", action="idle", timestamp=time.time())
 
@@ -316,12 +323,21 @@ def start_build(config: Config, manager: PluginManager,
 # ----------------------------------------------------------- review role
 
 def start_review(config: Config, manager: PluginManager,
-                 worker_index: Optional[int] = None) -> PassEngineEvent:
+                 worker_index: Optional[int] = None,
+                 exclude_issues: Optional[set] = None) -> PassEngineEvent:
     """Pick the oldest issue awaiting review and check out its branch
     (AC-3). Returns an "idle" event when nothing is in review (AC-7).
+
+    `exclude_issues` holds issue IDs already owned by a live worker.
+    Critical here: unlike start_build(), this function does NOT mutate the
+    issue's labels, so without the exclusion a multi-worker tick would pick
+    the same sorted-first issue on every iteration and spawn N duplicate
+    reviewers on it.
     """
     linear = _linear_plugin(manager)
-    in_review = linear.list_in_review()
+    exclude = exclude_issues or set()
+    in_review = [i for i in linear.list_in_review()
+                 if i.get("identifier") not in exclude]
     if not in_review:
         return PassEngineEvent(role="review", action="idle", timestamp=time.time())
 
